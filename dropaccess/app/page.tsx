@@ -1,9 +1,25 @@
+"use client"
+
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
+  const [status, setStatus] = useState("Not tested");
+
+  const testSupabase = async () => {
+    const { data, error } = await supabase.from("drops").select("*").limit(1);
+    if (error) {
+      setStatus(`Error: ${error.message}`);
+    } else {
+      setStatus(`Success: Found ${data.length} rows`);
+    }
+  };
+
   return (
-    <main className="flex min-h-screen items-center justify-center">
-      <Button>Hello Drop!</Button>
+    <main className="flex min-h-screen flex-col items-center justify-center">
+      <Button onClick={testSupabase}>Test Supabase Connection</Button>
+      <div className="mt-4">{status}</div>
     </main>
   );
 }
