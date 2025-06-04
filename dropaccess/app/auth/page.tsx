@@ -1,31 +1,39 @@
-"use client";
+'use client'
 
-import { Auth } from "@supabase/auth-ui-react";
-import { ThemeSupa } from "@supabase/auth-ui-shared";
-import { supabase } from "@/lib/supabaseClient";
-import { useEffect } from "react";
-import { useAuth } from "@/lib/AuthProvider";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/components/AuthProvider'
+import { AuthForm } from '@/components/AuthForm'
 
 export default function AuthPage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  const { user, loading } = useAuth()
+  const router = useRouter()
 
   useEffect(() => {
-    if (!loading && user) {
-      router.replace("/dashboard");
+    if (user && !loading) {
+      router.push('/dashboard')
     }
-  }, [user, loading, router]);
+  }, [user, loading, router])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+      </div>
+    )
+  }
+
+  if (user) {
+    return null // Will redirect
+  }
 
   return (
-    <main className="flex min-h-screen items-center justify-center">
-      <Auth
-        supabaseClient={supabase}
-        appearance={{ theme: ThemeSupa }}
-        providers={[]}
-        theme="dark"
-        // If you want to show a custom message or handle magic link, you can add event handlers here.
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-purple-50 flex items-center justify-center p-4">
+      <AuthForm 
+        mode={mode} 
+        onToggleMode={() => setMode(mode === 'signin' ? 'signup' : 'signin')} 
       />
-    </main>
-  );
+    </div>
+  )
 }
