@@ -1,17 +1,14 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { DropForm } from "@/components/DropForm";
+import { Navbar } from "@/components/Navbar";
 
 export default function NewDropPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <Card className="w-full max-w-lg shadow-lg border border-primary">
-        <CardHeader>
-          <CardTitle className="text-primary text-2xl">Create a New Drop</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <DropForm />
-        </CardContent>
-      </Card>
+    <div className="min-h-screen bg-background py-8">
+      <Navbar/>
+      <div className="container ml-20 max-w-auto mx-auto px-4">
+        <DropForm />
+      </div>
     </div>
   );
 }

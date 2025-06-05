@@ -29,14 +29,16 @@
       {
         "name": "next"
       }
-    ]
+    ],
+     "types": ["node", "phoenix"]
+
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     "next-env.d.ts",
     ".next/types/**/*.ts"
-  ],
+, "next.config.ts"  ],
   "exclude": [
     "node_modules"
   ]

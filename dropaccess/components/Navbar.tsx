@@ -16,24 +16,16 @@ export function Navbar() {
   const { user, signOut } = useAuth()
 
   return (
-    <nav className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center py-4">
-          {/* Logo */}
-          <Link href="/" className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-              <Shield className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold text-gray-900">DropAccess</span>
-          </Link>
-
-          {/* Navigation */}
-          <div className="flex items-center space-x-4">
+    <div className="bg-background sticky z-50">
+    <nav className="border-b ">
+        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+          <h1 className="text-2xl font-bold">DropAccess</h1>
+          <div className="flex gap-4">
             {user ? (
               <>
                 {/* Create Drop Button */}
                 <Link href="/drops/new">
-                  <Button className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
+                  <Button>
                     <Plus className="w-4 h-4 mr-2" />
                     New Drop
                   </Button>
@@ -79,7 +71,8 @@ export function Navbar() {
             )}
           </div>
         </div>
+      </nav>
+      
       </div>
-    </nav>
   )
 }
