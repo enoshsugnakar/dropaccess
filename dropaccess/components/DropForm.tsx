@@ -16,14 +16,17 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useState } from "react";
-import { FileUp, Link2, Shield, Users, Clock, Info } from "lucide-react";
+import { FileUp, Link2, Shield, Users, Clock, Info, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
+import { useAuth } from "@/components/AuthProvider";
 
+// Robust validation: maskedUrl is required and must be a valid URL only if dropType === "url"
 const dropFormSchema = z
   .object({
-    name: z.string().min(1, "Drop name is required").max(100),
+    name: z.string().max(100).optional(),
+    description: z.string().max(500).optional(),
     dropType: z.enum(["file", "url"]),
     maskedUrl: z.string().optional(),
     recipients: z.string().min(1, "At least one recipient email is required"),
@@ -31,33 +34,44 @@ const dropFormSchema = z
     customExpiry: z.string().optional(),
     oneTimeAccess: z.boolean().default(false),
     sendNotifications: z.boolean().default(true),
-    description: z.string().max(500).optional(),
   })
-  .refine(
-    (data) => {
-      if (data.dropType === "url" && (!data.maskedUrl || data.maskedUrl.trim() === "")) {
-        return false;
-      }
-      if (data.dropType === "url" && data.maskedUrl) {
+  .superRefine((data, ctx) => {
+    // Masked URL: required and must be a valid URL if dropType is "url"
+    if (data.dropType === "url") {
+      if (!data.maskedUrl || !data.maskedUrl.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "A URL is required when using Masked URL.",
+          path: ["maskedUrl"],
+        });
+      } else {
         try {
-          new URL(data.maskedUrl);
-          return true;
+          // Will throw if not a valid URL
+          new URL(data.maskedUrl.trim());
         } catch {
-          return false;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Please enter a valid URL (e.g. https://example.com).",
+            path: ["maskedUrl"],
+          });
         }
       }
-      return true;
-    },
-    {
-      message: "Please enter a valid URL",
-      path: ["maskedUrl"],
     }
-  );
+    // Custom expiry required if expiresIn is custom
+    if (data.expiresIn === "custom" && !data.customExpiry) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Please select a custom expiry date",
+        path: ["customExpiry"],
+      });
+    }
+  });
 
 type DropFormData = z.infer<typeof dropFormSchema>;
 
 export function DropForm() {
   const router = useRouter();
+  const { user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
@@ -71,19 +85,22 @@ export function DropForm() {
   } = useForm<DropFormData>({
     resolver: zodResolver(dropFormSchema),
     defaultValues: {
-      name: "",
+      name: "Untitled",
+      description: "",
       dropType: "url",
+      maskedUrl: "",
+      recipients: "",
       expiresIn: "24h",
+      customExpiry: "",
       oneTimeAccess: false,
       sendNotifications: true,
-      description: "",
-      recipients: "",
-      maskedUrl: "",
     },
   });
 
   const dropType = watch("dropType");
   const expiresIn = watch("expiresIn");
+  const oneTimeAccess = watch("oneTimeAccess");
+  const sendNotifications = watch("sendNotifications");
 
   const calculateExpiryDate = (expiresIn: string, customExpiry?: string) => {
     if (expiresIn === "custom" && customExpiry) {
@@ -104,12 +121,12 @@ export function DropForm() {
     }
   };
 
-  // Fixed function signature, file naming, and path logic
   const handleFileUpload = async (file: File, dropId: string): Promise<string> => {
     const fileExt = file.name.split(".").pop() ?? "bin";
-    const randomPortion = Math.random().toString().slice(2);
+    const randomPortion = Math.random().toString(36).substring(2, 15);
     const fileName = `${dropId}/${randomPortion}.${fileExt}`;
     const filePath = `drops/${fileName}`;
+    
     const { error: uploadError } = await supabase.storage
       .from("drops")
       .upload(filePath, file);
@@ -121,16 +138,20 @@ export function DropForm() {
   };
 
   const onSubmit = async (data: DropFormData) => {
+    if (!user) {
+      toast.error("Please sign in to create a drop");
+      router.push("/auth");
+      return;
+    }
+
+    // Additional validation for file upload
+    if (data.dropType === "file" && !uploadedFile) {
+      toast.error("Please select a file to upload");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError || !user) {
-        throw new Error("Please sign in to create a drop");
-      }
-
       const dropPayload = {
         owner_id: user.id,
         name: data.name,
@@ -139,6 +160,7 @@ export function DropForm() {
         expires_at: calculateExpiryDate(data.expiresIn, data.customExpiry),
         description: data.description || null,
         one_time_access: data.oneTimeAccess,
+        is_active: true,
       };
 
       const { data: insertedDrop, error: dropError } = await supabase
@@ -148,9 +170,10 @@ export function DropForm() {
         .single();
 
       if (dropError || !insertedDrop) {
-        throw dropError ?? new Error("Drop insert failed");
+        throw dropError ?? new Error("Failed to create drop");
       }
 
+      // Handle file upload if needed
       if (data.dropType === "file" && uploadedFile) {
         const fullPath = await handleFileUpload(uploadedFile, insertedDrop.id);
         const { error: updateError } = await supabase
@@ -161,6 +184,7 @@ export function DropForm() {
         if (updateError) throw updateError;
       }
 
+      // Process recipients
       const recipientEmails = data.recipients
         .split(/[,\n]/)
         .map((email) => email.trim())
@@ -177,14 +201,15 @@ export function DropForm() {
 
       if (recipientsError) throw recipientsError;
 
+      // Send notifications if enabled
       if (data.sendNotifications) {
-        // Add email notification logic here in production
+        // TODO: Implement email notification logic
         console.log("Would send notifications to:", recipientEmails);
       }
 
       toast.success("Drop created successfully!");
       reset();
-      router.push(`/drops/${insertedDrop.id}`);
+      router.push(`/drops/${insertedDrop.id}/manage`);
     } catch (err: any) {
       console.error("Error creating drop:", err);
       toast.error(err.message || "Failed to create drop");
@@ -196,32 +221,36 @@ export function DropForm() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
     if (file.size > 100 * 1024 * 1024) {
       toast.error("File size must be less than 100MB");
+      e.target.value = "";
       return;
     }
+    
     setUploadedFile(file);
   };
 
   return (
-    <div className="min-h-screen bg-background pt-20 pb-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 pt-20 pb-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Page Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
             <Shield className="w-8 h-8 text-purple-600" />
             Create Secure Drop
           </h1>
-          <p className="mt-2 text-lg text-gray-600">
+          <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">
             Share files and links securely with time-based access control
           </p>
         </div>
+
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Column */}
             <div className="space-y-6">
               {/* Drop Details Card */}
-              <Card className="shadow-sm">
+              <Card className="shadow-lg">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-xl flex items-center gap-2">
                     <Info className="w-5 h-5" />
@@ -238,7 +267,7 @@ export function DropForm() {
                       id="name"
                       {...register("name")}
                       placeholder="e.g., Q4 Financial Report"
-                      className={errors.name ? "border-red-500" : ""}
+                      className={errors.name ? "border-red-500 focus:ring-red-500" : ""}
                     />
                     {errors.name && (
                       <p className="text-sm text-red-500 mt-1">{errors.name.message}</p>
@@ -253,9 +282,12 @@ export function DropForm() {
                       id="description"
                       {...register("description")}
                       placeholder="Optional: Add context for recipients..."
-                      rows={2}
+                      rows={3}
                       className="resize-none"
                     />
+                    {errors.description && (
+                      <p className="text-sm text-red-500 mt-1">{errors.description.message}</p>
+                    )}
                   </div>
 
                   <div>
@@ -265,7 +297,7 @@ export function DropForm() {
                       onValueChange={(value) => setValue("dropType", value as "file" | "url")}
                       className="space-y-2"
                     >
-                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 cursor-pointer">
+                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors">
                         <RadioGroupItem value="url" id="url" />
                         <Label htmlFor="url" className="flex items-center cursor-pointer flex-1">
                           <Link2 className="w-4 h-4 mr-2 text-purple-600" />
@@ -275,7 +307,7 @@ export function DropForm() {
                           </div>
                         </Label>
                       </div>
-                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 cursor-pointer">
+                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors">
                         <RadioGroupItem value="file" id="file" />
                         <Label htmlFor="file" className="flex items-center cursor-pointer flex-1">
                           <FileUp className="w-4 h-4 mr-2 text-purple-600" />
@@ -298,7 +330,7 @@ export function DropForm() {
                         type="url"
                         {...register("maskedUrl")}
                         placeholder="https://example.com/sensitive-document"
-                        className={errors.maskedUrl ? "border-red-500" : ""}
+                        className={errors.maskedUrl ? "border-red-500 focus:ring-red-500" : ""}
                       />
                       {errors.maskedUrl && (
                         <p className="text-sm text-red-500 mt-1">{errors.maskedUrl.message}</p>
@@ -316,24 +348,26 @@ export function DropForm() {
                         type="file"
                         onChange={handleFileChange}
                         className="cursor-pointer"
+                        accept="*/*"
                       />
                       {uploadedFile && (
-                        <div className="mt-2 p-2 bg-purple-50 rounded-md">
-                          <p className="text-sm text-purple-700 font-medium">
+                        <div className="mt-2 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-md">
+                          <p className="text-sm text-purple-700 dark:text-purple-300 font-medium truncate">
                             {uploadedFile.name}
                           </p>
-                          <p className="text-xs text-purple-600">
+                          <p className="text-xs text-purple-600 dark:text-purple-400">
                             {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB
                           </p>
                         </div>
                       )}
+                      <p className="text-xs text-gray-500 mt-1">Maximum file size: 100MB</p>
                     </div>
                   )}
                 </CardContent>
               </Card>
 
               {/* Access Control Card */}
-              <Card className="shadow-sm">
+              <Card className="shadow-lg">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-xl flex items-center gap-2">
                     <Clock className="w-5 h-5" />
@@ -349,23 +383,23 @@ export function DropForm() {
                       onValueChange={(value) => setValue("expiresIn", value as any)}
                       className="grid grid-cols-2 gap-2"
                     >
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50">
+                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                         <RadioGroupItem value="1h" id="1h" />
                         <Label htmlFor="1h" className="cursor-pointer text-sm">1 Hour</Label>
                       </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50">
+                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                         <RadioGroupItem value="24h" id="24h" />
                         <Label htmlFor="24h" className="cursor-pointer text-sm">24 Hours</Label>
                       </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50">
+                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                         <RadioGroupItem value="7d" id="7d" />
                         <Label htmlFor="7d" className="cursor-pointer text-sm">7 Days</Label>
                       </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50">
+                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                         <RadioGroupItem value="30d" id="30d" />
                         <Label htmlFor="30d" className="cursor-pointer text-sm">30 Days</Label>
                       </div>
-                      <div className="col-span-2 flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50">
+                      <div className="col-span-2 flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                         <RadioGroupItem value="custom" id="custom" />
                         <Label htmlFor="custom" className="cursor-pointer text-sm">Custom Date & Time</Label>
                       </div>
@@ -375,27 +409,30 @@ export function DropForm() {
                   {expiresIn === "custom" && (
                     <div>
                       <Label htmlFor="customExpiry" className="text-sm font-medium mb-1.5 block">
-                        Custom Expiry
+                        Custom Expiry <span className="text-red-500">*</span>
                       </Label>
                       <Input
                         id="customExpiry"
                         type="datetime-local"
                         {...register("customExpiry")}
                         min={new Date().toISOString().slice(0, 16)}
-                        className="w-full"
+                        className={errors.customExpiry ? "border-red-500 focus:ring-red-500" : ""}
                       />
+                      {errors.customExpiry && (
+                        <p className="text-sm text-red-500 mt-1">{errors.customExpiry.message}</p>
+                      )}
                     </div>
                   )}
 
                   <div className="space-y-3 pt-2">
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                       <Label htmlFor="oneTimeAccess" className="cursor-pointer">
                         <p className="font-medium text-sm">One-time Access</p>
                         <p className="text-xs text-gray-500">Expires after first view</p>
                       </Label>
                       <Switch
                         id="oneTimeAccess"
-                        checked={watch("oneTimeAccess")}
+                        checked={oneTimeAccess}
                         onCheckedChange={(checked) => setValue("oneTimeAccess", checked)}
                       />
                     </div>
@@ -407,7 +444,7 @@ export function DropForm() {
             {/* Right Column */}
             <div className="space-y-6">
               {/* Recipients Card */}
-              <Card className="shadow-sm h-full">
+              <Card className="shadow-lg h-full">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-xl flex items-center gap-2">
                     <Users className="w-5 h-5" />
@@ -425,7 +462,7 @@ export function DropForm() {
                       {...register("recipients")}
                       placeholder="john@example.com, jane@example.com&#10;&#10;or enter one email per line..."
                       rows={12}
-                      className={`resize-none ${errors.recipients ? "border-red-500" : ""}`}
+                      className={`resize-none font-mono text-sm ${errors.recipients ? "border-red-500 focus:ring-red-500" : ""}`}
                     />
                     {errors.recipients && (
                       <p className="text-sm text-red-500 mt-1">{errors.recipients.message}</p>
@@ -436,17 +473,28 @@ export function DropForm() {
                   </div>
 
                   <div className="pt-4">
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                       <Label htmlFor="sendNotifications" className="cursor-pointer">
                         <p className="font-medium text-sm">Email Notifications</p>
                         <p className="text-xs text-gray-500">Notify recipients when drop is created</p>
                       </Label>
                       <Switch
                         id="sendNotifications"
-                        checked={watch("sendNotifications")}
+                        checked={sendNotifications}
                         onCheckedChange={(checked) => setValue("sendNotifications", checked)}
                       />
                     </div>
+                  </div>
+
+                  {/* Summary */}
+                  <div className="mt-6 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                    <h4 className="text-sm font-medium text-purple-900 dark:text-purple-100 mb-2">Drop Summary</h4>
+                    <ul className="space-y-1 text-xs text-purple-700 dark:text-purple-300">
+                      <li>• Type: {dropType === "url" ? "Masked URL" : "File Upload"}</li>
+                      <li>• Expires: {expiresIn === "custom" ? "Custom date" : expiresIn}</li>
+                      <li>• One-time access: {oneTimeAccess ? "Yes" : "No"}</li>
+                      <li>• Notifications: {sendNotifications ? "Enabled" : "Disabled"}</li>
+                    </ul>
                   </div>
 
                   {/* Action Buttons */}
@@ -466,7 +514,10 @@ export function DropForm() {
                       className="px-6 bg-purple-600 hover:bg-purple-700"
                     >
                       {isSubmitting ? (
-                        <>Creating Drop...</>
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Creating Drop...
+                        </>
                       ) : (
                         <>
                           <Shield className="w-4 h-4 mr-2" />
