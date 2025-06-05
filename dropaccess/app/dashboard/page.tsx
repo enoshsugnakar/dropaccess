@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Navbar } from '@/components/Navbar'
 import { Input } from '@/components/ui/input'
 import {
   Plus,
@@ -195,20 +196,17 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pt-20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+    <div className="min-h-screen bg-gray-50 pt-10">
+       <Navbar/>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-20">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="mt-1 text-gray-600">Manage your secure drops</p>
           </div>
-          <Link href="/drops/new">
-            <Button className="bg-purple-600 hover:bg-purple-700">
-              <Plus className="w-4 h-4 mr-2" />
-              New Drop
-            </Button>
-          </Link>
+          
         </div>
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
