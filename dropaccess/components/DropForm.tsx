@@ -1,7 +1,4 @@
 "use client";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -22,85 +19,160 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAuth } from "@/components/AuthProvider";
 
-// Robust validation: maskedUrl is required and must be a valid URL only if dropType === "url"
-const dropFormSchema = z
-  .object({
-    name: z.string().max(100).optional(),
-    description: z.string().max(500).optional(),
-    dropType: z.enum(["file", "url"]),
-    maskedUrl: z.string().optional(),
-    recipients: z.string().min(1, "At least one recipient email is required"),
-    expiresIn: z.enum(["1h", "24h", "7d", "30d", "custom"]),
-    customExpiry: z.string().optional(),
-    oneTimeAccess: z.boolean().default(false),
-    sendNotifications: z.boolean().default(true),
-  })
-  .superRefine((data, ctx) => {
-    // Masked URL: required and must be a valid URL if dropType is "url"
-    if (data.dropType === "url") {
-      if (!data.maskedUrl || !data.maskedUrl.trim()) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "A URL is required when using Masked URL.",
-          path: ["maskedUrl"],
-        });
-      } else {
-        try {
-          // Will throw if not a valid URL
-          new URL(data.maskedUrl.trim());
-        } catch {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "Please enter a valid URL (e.g. https://example.com).",
-            path: ["maskedUrl"],
-          });
-        }
-      }
-    }
-    // Custom expiry required if expiresIn is custom
-    if (data.expiresIn === "custom" && !data.customExpiry) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Please select a custom expiry date",
-        path: ["customExpiry"],
-      });
-    }
-  });
-
-type DropFormData = z.infer<typeof dropFormSchema>;
+interface FormData {
+  name: string;
+  description: string;
+  dropType: "file" | "url";
+  maskedUrl: string;
+  recipients: string;
+  expiresIn: "1h" | "24h" | "7d" | "30d" | "custom";
+  customExpiry: string;
+  oneTimeAccess: boolean;
+  sendNotifications: boolean;
+}
 
 export function DropForm() {
   const router = useRouter();
   const { user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors },
-    reset,
-  } = useForm<DropFormData>({
-    resolver: zodResolver(dropFormSchema),
-    defaultValues: {
-      name: "Untitled",
-      description: "",
-      dropType: "url",
-      maskedUrl: "",
-      recipients: "",
-      expiresIn: "24h",
-      customExpiry: "",
-      oneTimeAccess: false,
-      sendNotifications: true,
-    },
+  const [formData, setFormData] = useState<FormData>({
+    name: "",
+    description: "",
+    dropType: "url",
+    maskedUrl: "",
+    recipients: "",
+    expiresIn: "24h",
+    customExpiry: "",
+    oneTimeAccess: false,
+    sendNotifications: true,
   });
 
-  const dropType = watch("dropType");
-  const expiresIn = watch("expiresIn");
-  const oneTimeAccess = watch("oneTimeAccess");
-  const sendNotifications = watch("sendNotifications");
+  const updateField = (field: keyof FormData, value: any) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    // Clear error when user starts typing
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: "" }));
+    }
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    // Validate name
+    if (!formData.name.trim()) {
+      newErrors.name = "Drop name is required";
+    } else if (formData.name.length > 100) {
+      newErrors.name = "Drop name must be less than 100 characters";
+    }
+
+    // Validate URL if dropType is url
+    if (formData.dropType === "url") {
+      if (!formData.maskedUrl.trim()) {
+        newErrors.maskedUrl = "URL is required for masked URL drops";
+      } else {
+        try {
+          new URL(formData.maskedUrl.trim());
+        } catch {
+          newErrors.maskedUrl = "Please enter a valid URL (e.g., https://example.com)";
+        }
+      }
+    }
+
+    // Validate file if dropType is file
+    if (formData.dropType === "file" && !uploadedFile) {
+      newErrors.file = "Please select a file to upload";
+    }
+
+    // Validate recipients
+    if (!formData.recipients.trim()) {
+      newErrors.recipients = "At least one recipient email is required";
+    } else {
+      const emails = formData.recipients
+        .split(/[,\n]/)
+        .map(email => email.trim())
+        .filter(email => email.length > 0);
+      
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const invalidEmails = emails.filter(email => !emailRegex.test(email));
+      
+      if (invalidEmails.length > 0) {
+        newErrors.recipients = `Invalid email format: ${invalidEmails.join(', ')}`;
+      }
+    }
+
+    // Validate custom expiry
+    if (formData.expiresIn === "custom") {
+      if (!formData.customExpiry) {
+        newErrors.customExpiry = "Please select a custom expiry date and time";
+      } else {
+        const expiryDate = new Date(formData.customExpiry);
+        const now = new Date();
+        if (expiryDate <= now) {
+          newErrors.customExpiry = "Expiry date must be in the future";
+        }
+      }
+    }
+
+    // Validate description length
+    if (formData.description && formData.description.length > 500) {
+      newErrors.description = "Description must be less than 500 characters";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Function to ensure user exists in users table
+  const ensureUserExists = async () => {
+    if (!user) return false;
+
+    try {
+      // Check if user already exists in users table
+      const { data: existingUser, error: checkError } = await supabase
+        .from("users")
+        .select("id")
+        .eq("id", user.id)
+        .single();
+
+      if (checkError && checkError.code !== "PGRST116") {
+        // PGRST116 is "not found" error, other errors are real problems
+        console.error("Error checking user existence:", checkError);
+        throw checkError;
+      }
+
+      // If user doesn't exist, create them
+      if (!existingUser) {
+        console.log("User not found in users table, creating...");
+        
+        const { data: newUser, error: insertError } = await supabase
+          .from("users")
+          .insert({
+            id: user.id,
+            email: user.email || "",
+            is_paid: false,
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error("Error creating user:", insertError);
+          throw insertError;
+        }
+
+        console.log("User created successfully:", newUser);
+      } else {
+        console.log("User already exists in users table");
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Error ensuring user exists:", error);
+      return false;
+    }
+  };
 
   const calculateExpiryDate = (expiresIn: string, customExpiry?: string) => {
     if (expiresIn === "custom" && customExpiry) {
@@ -137,31 +209,40 @@ export function DropForm() {
     return filePath;
   };
 
-  const onSubmit = async (data: DropFormData) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
     if (!user) {
       toast.error("Please sign in to create a drop");
       router.push("/auth");
       return;
     }
 
-    // Additional validation for file upload
-    if (data.dropType === "file" && !uploadedFile) {
-      toast.error("Please select a file to upload");
+    if (!validateForm()) {
+      toast.error("Please fix the errors below");
       return;
     }
 
     setIsSubmitting(true);
     try {
+      // First, ensure the user exists in the users table
+      const userExists = await ensureUserExists();
+      if (!userExists) {
+        throw new Error("Failed to create or verify user account");
+      }
+
       const dropPayload = {
         owner_id: user.id,
-        name: data.name,
-        drop_type: data.dropType,
-        masked_url: data.dropType === "url" ? data.maskedUrl : null,
-        expires_at: calculateExpiryDate(data.expiresIn, data.customExpiry),
-        description: data.description || null,
-        one_time_access: data.oneTimeAccess,
+        name: formData.name.trim(),
+        drop_type: formData.dropType,
+        masked_url: formData.dropType === "url" ? formData.maskedUrl.trim() : null,
+        expires_at: calculateExpiryDate(formData.expiresIn, formData.customExpiry),
+        description: formData.description.trim() || null,
+        one_time_access: formData.oneTimeAccess,
         is_active: true,
       };
+
+      console.log("Creating drop with payload:", dropPayload);
 
       const { data: insertedDrop, error: dropError } = await supabase
         .from("drops")
@@ -170,11 +251,14 @@ export function DropForm() {
         .single();
 
       if (dropError || !insertedDrop) {
+        console.error("Drop creation error:", dropError);
         throw dropError ?? new Error("Failed to create drop");
       }
 
+      console.log("Drop created successfully:", insertedDrop);
+
       // Handle file upload if needed
-      if (data.dropType === "file" && uploadedFile) {
+      if (formData.dropType === "file" && uploadedFile) {
         const fullPath = await handleFileUpload(uploadedFile, insertedDrop.id);
         const { error: updateError } = await supabase
           .from("drops")
@@ -185,7 +269,7 @@ export function DropForm() {
       }
 
       // Process recipients
-      const recipientEmails = data.recipients
+      const recipientEmails = formData.recipients
         .split(/[,\n]/)
         .map((email) => email.trim())
         .filter((email) => email.length > 0);
@@ -199,16 +283,33 @@ export function DropForm() {
         .from("drop_recipients")
         .insert(recipientsPayload);
 
-      if (recipientsError) throw recipientsError;
+      if (recipientsError) {
+        console.error("Recipients error:", recipientsError);
+        throw recipientsError;
+      }
 
       // Send notifications if enabled
-      if (data.sendNotifications) {
-        // TODO: Implement email notification logic
+      if (formData.sendNotifications) {
         console.log("Would send notifications to:", recipientEmails);
       }
 
       toast.success("Drop created successfully!");
-      reset();
+      
+      // Reset form
+      setFormData({
+        name: "",
+        description: "",
+        dropType: "url",
+        maskedUrl: "",
+        recipients: "",
+        expiresIn: "24h",
+        customExpiry: "",
+        oneTimeAccess: false,
+        sendNotifications: true,
+      });
+      setUploadedFile(null);
+      setErrors({});
+      
       router.push(`/drops/${insertedDrop.id}/manage`);
     } catch (err: any) {
       console.error("Error creating drop:", err);
@@ -229,6 +330,17 @@ export function DropForm() {
     }
     
     setUploadedFile(file);
+    // Clear file error if exists
+    if (errors.file) {
+      setErrors(prev => ({ ...prev, file: "" }));
+    }
+  };
+
+  const handleDropTypeChange = (value: "file" | "url") => {
+    updateField("dropType", value);
+    if (value === "file") {
+      updateField("maskedUrl", "");
+    }
   };
 
   return (
@@ -245,7 +357,7 @@ export function DropForm() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
+        <form onSubmit={handleSubmit}>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Column */}
             <div className="space-y-6">
@@ -265,12 +377,13 @@ export function DropForm() {
                     </Label>
                     <Input
                       id="name"
-                      {...register("name")}
+                      value={formData.name}
+                      onChange={(e) => updateField("name", e.target.value)}
                       placeholder="e.g., Q4 Financial Report"
                       className={errors.name ? "border-red-500 focus:ring-red-500" : ""}
                     />
                     {errors.name && (
-                      <p className="text-sm text-red-500 mt-1">{errors.name.message}</p>
+                      <p className="text-sm text-red-500 mt-1">{errors.name}</p>
                     )}
                   </div>
 
@@ -280,21 +393,22 @@ export function DropForm() {
                     </Label>
                     <Textarea
                       id="description"
-                      {...register("description")}
+                      value={formData.description}
+                      onChange={(e) => updateField("description", e.target.value)}
                       placeholder="Optional: Add context for recipients..."
                       rows={3}
                       className="resize-none"
                     />
                     {errors.description && (
-                      <p className="text-sm text-red-500 mt-1">{errors.description.message}</p>
+                      <p className="text-sm text-red-500 mt-1">{errors.description}</p>
                     )}
                   </div>
 
                   <div>
                     <Label className="text-sm font-medium mb-3 block">Share Type</Label>
                     <RadioGroup
-                      value={dropType}
-                      onValueChange={(value) => setValue("dropType", value as "file" | "url")}
+                      value={formData.dropType}
+                      onValueChange={handleDropTypeChange}
                       className="space-y-2"
                     >
                       <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors">
@@ -320,25 +434,25 @@ export function DropForm() {
                     </RadioGroup>
                   </div>
 
-                  {dropType === "url" && (
+                  {formData.dropType === "url" && (
                     <div>
                       <Label htmlFor="maskedUrl" className="text-sm font-medium mb-1.5 block">
                         URL to Mask <span className="text-red-500">*</span>
                       </Label>
                       <Input
                         id="maskedUrl"
-                        type="url"
-                        {...register("maskedUrl")}
+                        value={formData.maskedUrl}
+                        onChange={(e) => updateField("maskedUrl", e.target.value)}
                         placeholder="https://example.com/sensitive-document"
                         className={errors.maskedUrl ? "border-red-500 focus:ring-red-500" : ""}
                       />
                       {errors.maskedUrl && (
-                        <p className="text-sm text-red-500 mt-1">{errors.maskedUrl.message}</p>
+                        <p className="text-sm text-red-500 mt-1">{errors.maskedUrl}</p>
                       )}
                     </div>
                   )}
 
-                  {dropType === "file" && (
+                  {formData.dropType === "file" && (
                     <div>
                       <Label htmlFor="file" className="text-sm font-medium mb-1.5 block">
                         Upload File <span className="text-red-500">*</span>
@@ -350,6 +464,9 @@ export function DropForm() {
                         className="cursor-pointer"
                         accept="*/*"
                       />
+                      {errors.file && (
+                        <p className="text-sm text-red-500 mt-1">{errors.file}</p>
+                      )}
                       {uploadedFile && (
                         <div className="mt-2 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-md">
                           <p className="text-sm text-purple-700 dark:text-purple-300 font-medium truncate">
@@ -379,8 +496,8 @@ export function DropForm() {
                   <div>
                     <Label className="text-sm font-medium mb-3 block">Expiration Time</Label>
                     <RadioGroup
-                      value={expiresIn}
-                      onValueChange={(value) => setValue("expiresIn", value as any)}
+                      value={formData.expiresIn}
+                      onValueChange={(value) => updateField("expiresIn", value)}
                       className="grid grid-cols-2 gap-2"
                     >
                       <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
@@ -406,7 +523,7 @@ export function DropForm() {
                     </RadioGroup>
                   </div>
 
-                  {expiresIn === "custom" && (
+                  {formData.expiresIn === "custom" && (
                     <div>
                       <Label htmlFor="customExpiry" className="text-sm font-medium mb-1.5 block">
                         Custom Expiry <span className="text-red-500">*</span>
@@ -414,12 +531,13 @@ export function DropForm() {
                       <Input
                         id="customExpiry"
                         type="datetime-local"
-                        {...register("customExpiry")}
+                        value={formData.customExpiry}
+                        onChange={(e) => updateField("customExpiry", e.target.value)}
                         min={new Date().toISOString().slice(0, 16)}
                         className={errors.customExpiry ? "border-red-500 focus:ring-red-500" : ""}
                       />
                       {errors.customExpiry && (
-                        <p className="text-sm text-red-500 mt-1">{errors.customExpiry.message}</p>
+                        <p className="text-sm text-red-500 mt-1">{errors.customExpiry}</p>
                       )}
                     </div>
                   )}
@@ -432,8 +550,8 @@ export function DropForm() {
                       </Label>
                       <Switch
                         id="oneTimeAccess"
-                        checked={oneTimeAccess}
-                        onCheckedChange={(checked) => setValue("oneTimeAccess", checked)}
+                        checked={formData.oneTimeAccess}
+                        onCheckedChange={(checked) => updateField("oneTimeAccess", checked)}
                       />
                     </div>
                   </div>
@@ -459,13 +577,14 @@ export function DropForm() {
                     </Label>
                     <Textarea
                       id="recipients"
-                      {...register("recipients")}
+                      value={formData.recipients}
+                      onChange={(e) => updateField("recipients", e.target.value)}
                       placeholder="john@example.com, jane@example.com&#10;&#10;or enter one email per line..."
                       rows={12}
                       className={`resize-none font-mono text-sm ${errors.recipients ? "border-red-500 focus:ring-red-500" : ""}`}
                     />
                     {errors.recipients && (
-                      <p className="text-sm text-red-500 mt-1">{errors.recipients.message}</p>
+                      <p className="text-sm text-red-500 mt-1">{errors.recipients}</p>
                     )}
                     <p className="text-xs text-gray-500 mt-2">
                       Separate multiple emails with commas or new lines
@@ -480,8 +599,8 @@ export function DropForm() {
                       </Label>
                       <Switch
                         id="sendNotifications"
-                        checked={sendNotifications}
-                        onCheckedChange={(checked) => setValue("sendNotifications", checked)}
+                        checked={formData.sendNotifications}
+                        onCheckedChange={(checked) => updateField("sendNotifications", checked)}
                       />
                     </div>
                   </div>
@@ -490,10 +609,10 @@ export function DropForm() {
                   <div className="mt-6 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
                     <h4 className="text-sm font-medium text-purple-900 dark:text-purple-100 mb-2">Drop Summary</h4>
                     <ul className="space-y-1 text-xs text-purple-700 dark:text-purple-300">
-                      <li>• Type: {dropType === "url" ? "Masked URL" : "File Upload"}</li>
-                      <li>• Expires: {expiresIn === "custom" ? "Custom date" : expiresIn}</li>
-                      <li>• One-time access: {oneTimeAccess ? "Yes" : "No"}</li>
-                      <li>• Notifications: {sendNotifications ? "Enabled" : "Disabled"}</li>
+                      <li>• Type: {formData.dropType === "url" ? "Masked URL" : "File Upload"}</li>
+                      <li>• Expires: {formData.expiresIn === "custom" ? "Custom date" : formData.expiresIn}</li>
+                      <li>• One-time access: {formData.oneTimeAccess ? "Yes" : "No"}</li>
+                      <li>• Notifications: {formData.sendNotifications ? "Enabled" : "Disabled"}</li>
                     </ul>
                   </div>
 
@@ -510,7 +629,7 @@ export function DropForm() {
                     </Button>
                     <Button
                       type="submit"
-                      disabled={isSubmitting || (dropType === "file" && !uploadedFile)}
+                      disabled={isSubmitting}
                       className="px-6 bg-purple-600 hover:bg-purple-700"
                     >
                       {isSubmitting ? (
