@@ -301,7 +301,7 @@ export default function DashboardPage() {
                     {filteredDrops.map((drop) => (
                       <tr key={drop.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div href={`/drops/${drop.id}/manage`}>
+                          <div>
                             <div className="text-sm font-medium text-gray-900">
                               {drop.name}
                             </div>
@@ -347,6 +347,12 @@ export default function DashboardPage() {
                             <Clock className="w-4 h-4 mr-1 text-gray-400" />
                             {getTimeRemaining(drop.expires_at)}
                           </div>
+                        </td>
+                        <td>
+                          <Link href={`/drops/${drop.id}/manage`} className="flex items-center">
+                                  <ExternalLink className="w-4 h-4 mr-2" />
+                                  View Drop
+                            </Link>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <DropdownMenu>
