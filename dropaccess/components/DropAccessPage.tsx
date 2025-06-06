@@ -25,7 +25,8 @@ import {
   Image,
   PlayCircle,
   Monitor,
-  ArrowLeft
+  ArrowLeft,
+  Timer
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -42,7 +43,17 @@ interface DropData {
   allow_download?: boolean
 }
 
+interface VerificationSession {
+  dropId: string
+  email: string
+  verifiedAt: number
+  expiresAt: number
+}
+
 type ViewMode = 'verification' | 'content' | 'accessed'
+
+const SESSION_DURATION = 30 * 60 * 1000 // 30 minutes
+const SESSION_STORAGE_KEY = 'dropaccess_verification'
 
 export default function DropAccessPage() {
   const params = useParams()
@@ -59,8 +70,77 @@ export default function DropAccessPage() {
   const [contentUrl, setContentUrl] = useState<string | null>(null)
   const [contentType, setContentType] = useState<string>('')
   const [timeRemaining, setTimeRemaining] = useState<string>('')
-  const [showHeader, setShowHeader] = useState(true) // Initially visible
+  const [showHeader, setShowHeader] = useState(true)
   const [mouseInContent, setMouseInContent] = useState(false)
+
+  // Session management functions
+  const saveVerificationSession = (email: string) => {
+    const session: VerificationSession = {
+      dropId,
+      email,
+      verifiedAt: Date.now(),
+      expiresAt: Date.now() + SESSION_DURATION
+    }
+    
+    try {
+      // Get existing sessions
+      const existingSessions = getStoredSessions()
+      
+      // Remove any existing session for this drop
+      const filteredSessions = existingSessions.filter(s => s.dropId !== dropId)
+      
+      // Add new session
+      filteredSessions.push(session)
+      
+      // Clean up expired sessions while we're at it
+      const validSessions = filteredSessions.filter(s => s.expiresAt > Date.now())
+      
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(validSessions))
+    } catch (error) {
+      console.error('Failed to save verification session:', error)
+    }
+  }
+
+  const getStoredSessions = (): VerificationSession[] => {
+    try {
+      const stored = localStorage.getItem(SESSION_STORAGE_KEY)
+      return stored ? JSON.parse(stored) : []
+    } catch (error) {
+      console.error('Failed to get stored sessions:', error)
+      return []
+    }
+  }
+
+  const getValidSession = (): VerificationSession | null => {
+    try {
+      const sessions = getStoredSessions()
+      const session = sessions.find(s => 
+        s.dropId === dropId && 
+        s.expiresAt > Date.now()
+      )
+      return session || null
+    } catch (error) {
+      console.error('Failed to get valid session:', error)
+      return null
+    }
+  }
+
+  const clearSession = () => {
+    try {
+      const sessions = getStoredSessions()
+      const filteredSessions = sessions.filter(s => s.dropId !== dropId)
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(filteredSessions))
+    } catch (error) {
+      console.error('Failed to clear session:', error)
+    }
+  }
+
+  // Check for existing session on component mount
+  useEffect(() => {
+    if (dropId) {
+      checkDropAvailability()
+    }
+  }, [dropId])
 
   // Handle mouse enter/leave for content area
   const handleContentMouseEnter = () => {
@@ -90,6 +170,7 @@ export default function DropAccessPage() {
       if (diff <= 0) {
         setTimeRemaining('Expired')
         setError('This drop has expired')
+        clearSession() // Clear session if drop expired
         return
       }
       
@@ -115,12 +196,6 @@ export default function DropAccessPage() {
     return () => clearInterval(interval)
   }, [dropData])
 
-  useEffect(() => {
-    if (dropId) {
-      checkDropAvailability()
-    }
-  }, [dropId])
-
   const checkDropAvailability = async () => {
     try {
       const { data, error } = await supabase
@@ -139,12 +214,14 @@ export default function DropAccessPage() {
       const expiresAt = new Date(data.expires_at)
       if (expiresAt < now) {
         setError('This drop has expired')
+        clearSession()
         setLoading(false)
         return
       }
 
       if (!data.is_active) {
         setError('This drop is no longer active')
+        clearSession()
         setLoading(false)
         return
       }
@@ -158,12 +235,25 @@ export default function DropAccessPage() {
 
         if (!logsError && accessLogs && accessLogs.length > 0) {
           setError('This drop has already been accessed (one-time access only)')
+          clearSession()
           setLoading(false)
           return
         }
       }
 
       setDropData(data)
+
+      // Check for existing valid session
+      const existingSession = getValidSession()
+      if (existingSession) {
+        // Auto-verify with existing session
+        setEmail(existingSession.email)
+        setViewMode('content')
+        setLoading(false)
+        await prepareContent(existingSession.email)
+        return
+      }
+
       setLoading(false)
     } catch (err: any) {
       console.error('Error checking drop:', err)
@@ -197,9 +287,12 @@ export default function DropAccessPage() {
         return
       }
 
+      // Save verification session
+      saveVerificationSession(email.toLowerCase().trim())
+      
       setViewMode('content')
       toast.success('Email verified successfully')
-      await prepareContent()
+      await prepareContent(email.toLowerCase().trim())
     } catch (err: any) {
       console.error('Error verifying email:', err)
       setError('Failed to verify email')
@@ -208,8 +301,10 @@ export default function DropAccessPage() {
     }
   }
 
-  const prepareContent = async () => {
+  const prepareContent = async (verifiedEmail?: string) => {
     if (!dropData) return
+
+    const emailToUse = verifiedEmail || email
 
     setAccessing(true)
     
@@ -217,7 +312,7 @@ export default function DropAccessPage() {
       // Log the access
       await supabase.from('drop_access_logs').insert({
         drop_id: dropId,
-        recipient_email: email.toLowerCase().trim(),
+        recipient_email: emailToUse.toLowerCase().trim(),
         ip_address: null,
         user_agent: navigator.userAgent
       })
@@ -227,7 +322,7 @@ export default function DropAccessPage() {
         .from('drop_recipients')
         .select('*')
         .eq('drop_id', dropId)
-        .eq('email', email.toLowerCase().trim())
+        .eq('email', emailToUse.toLowerCase().trim())
         .single()
 
       if (recipient) {
@@ -251,6 +346,15 @@ export default function DropAccessPage() {
     } finally {
       setAccessing(false)
     }
+  }
+
+  const handleLogout = () => {
+    clearSession()
+    setViewMode('verification')
+    setEmail('')
+    setContentUrl(null)
+    setContentType('')
+    toast.success('Logged out successfully')
   }
 
   const handleUrlContent = async (url: string) => {
@@ -471,8 +575,8 @@ export default function DropAccessPage() {
             onMouseLeave={handleContentMouseLeave}
           >
             <div className="text-center">
-              <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <PlayCircle className="w-8 h-8 text-purple-600" />
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <PlayCircle className="w-8 h-8 text-primary" />
               </div>
               <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-white">{dropData?.name}</h3>
               <audio
@@ -510,15 +614,15 @@ export default function DropAccessPage() {
             onMouseLeave={handleContentMouseLeave}
           >
             <div className="text-center">
-              <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Download className="w-8 h-8 text-purple-600" />
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Download className="w-8 h-8 text-primary" />
               </div>
               <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-white">{dropData?.name}</h3>
               <p className="text-gray-600 dark:text-gray-400 mb-4">
                 {dropData?.allow_download ? 'This file requires download to view' : 'Download is not permitted for this file'}
               </p>
               {dropData?.allow_download && (
-                <Button onClick={downloadFile} className="bg-purple-600 hover:bg-purple-700">
+                <Button onClick={downloadFile}>
                   <Download className="w-4 h-4 mr-2" />
                   Download File
                 </Button>
@@ -532,8 +636,11 @@ export default function DropAccessPage() {
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-gray-800">
-        <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-gray-500 dark:text-gray-400">Loading secure drop...</p>
+        </div>
       </div>
     )
   }
@@ -541,25 +648,21 @@ export default function DropAccessPage() {
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-gray-800">
-        <Card className="max-w-md w-full shadow-xl">
-          <CardHeader className="text-center">
-            <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
-            </div>
-            <CardTitle className="text-2xl">Access Denied</CardTitle>
-            <CardDescription className="text-base mt-2">{error}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button 
-              onClick={() => router.push('/')} 
-              className="w-full"
-              variant="outline"
-            >
-              Go to Homepage
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-8 border border-gray-200 dark:border-gray-700 max-w-md w-full text-center shadow-lg">
+          <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
+          </div>
+          <h2 className="text-xl font-medium text-gray-900 dark:text-white mb-2">Access Denied</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-6">{error}</p>
+          <Button 
+            onClick={() => router.push('/')} 
+            variant="outline"
+            className="w-full font-medium"
+          >
+            Go to Homepage
+          </Button>
+        </div>
       </div>
     )
   }
@@ -567,73 +670,99 @@ export default function DropAccessPage() {
   // Verification state
   if (viewMode === 'verification') {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-gray-800">
-        <Card className="max-w-md w-full shadow-xl">
-          <CardHeader className="text-center">
-            <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Lock className="w-8 h-8 text-purple-600" />
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-8 border border-gray-200 dark:border-gray-700 max-w-md w-full shadow-lg">
+          {/* Header */}
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Shield className="w-8 h-8 text-primary" />
             </div>
-            <CardTitle className="text-2xl">Verify Your Access</CardTitle>
-            <CardDescription className="text-base mt-2">
+            <h1 className="text-2xl font-medium text-gray-900 dark:text-white mb-2">
+              Verify Your Access
+            </h1>
+            <p className="text-gray-500 dark:text-gray-400">
               Enter your email to access this secure drop
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={verifyEmail} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="your@email.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="pl-10"
-                    required
-                  />
-                </div>
-              </div>
-              
-              {dropData && (
-                <Alert>
-                  <Shield className="h-4 w-4" />
-                  <AlertDescription>
-                    <strong>{dropData.name}</strong>
-                    {dropData.description && (
-                      <p className="mt-1 text-sm">{dropData.description}</p>
-                    )}
-                    <div className="mt-2 flex items-center text-sm">
-                      <Clock className="w-3 h-3 mr-1 text-red-500" />
-                      <span className="text-red-600 font-medium">
-                        Expires in: {timeRemaining}
-                      </span>
-                    </div>
-                  </AlertDescription>
-                </Alert>
-              )}
+            </p>
+          </div>
 
-              <Button 
-                type="submit" 
-                className="w-full" 
-                disabled={verifying}
-              >
-                {verifying ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Verifying...
-                  </>
+          {/* Drop Info Alert */}
+          {dropData && (
+            <div className="mb-6 p-4 bg-primary/5 border border-primary/20 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                {dropData.drop_type === 'file' ? (
+                  <FileUp className="w-4 h-4 text-primary" />
                 ) : (
-                  <>
-                    <Shield className="w-4 h-4 mr-2" />
-                    Verify & Continue
-                  </>
+                  <Link2 className="w-4 h-4 text-primary" />
                 )}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                <h3 className="font-medium text-gray-900 dark:text-white">{dropData.name}</h3>
+              </div>
+              {dropData.description && (
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{dropData.description}</p>
+              )}
+              <div className="flex items-center gap-1 text-sm">
+                <Timer className="w-3 h-3 text-orange-600" />
+                <span className="text-orange-600 font-medium">
+                  Expires in: {timeRemaining}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Email Form */}
+          <form onSubmit={verifyEmail} className="space-y-4">
+            <div>
+              <Label htmlFor="email" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+                Email Address
+              </Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="your@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="pl-10"
+                  required
+                />
+              </div>
+            </div>
+
+            {error && (
+              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              </div>
+            )}
+
+            <Button 
+              type="submit" 
+              className="w-full font-medium" 
+              disabled={verifying}
+            >
+              {verifying ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Verifying...
+                </>
+              ) : (
+                <>
+                  <Shield className="w-4 h-4 mr-2" />
+                  Verify & Access
+                </>
+              )}
+            </Button>
+          </form>
+
+          {/* Security Notice */}
+          <div className="mt-6 text-center">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              🔒 This content is securely protected by DropAccess
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Your verification will be remembered for 30 minutes
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
@@ -653,7 +782,7 @@ export default function DropAccessPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setViewMode('verification')}
+              onClick={handleLogout}
               className="text-white hover:text-gray-300 hover:bg-white/10"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
@@ -687,6 +816,14 @@ export default function DropAccessPage() {
                 Download
               </Button>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleLogout}
+              className="text-white hover:text-gray-300 hover:bg-white/10"
+            >
+              Logout
+            </Button>
           </div>
         </div>
       </div>

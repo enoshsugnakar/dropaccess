@@ -7,7 +7,7 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card'
 import { Alert, AlertDescription } from './ui/alert'
-import { Loader2, Shield } from 'lucide-react'
+import { Loader2, Shield, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 interface AuthFormProps {
@@ -21,6 +21,7 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [resetMode, setResetMode] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   const { signIn, signUp, resetPassword } = useAuth()
 
@@ -59,44 +60,54 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
 
   if (resetMode) {
     return (
-      <Card className="w-full max-w-md mx-auto">
-        <CardHeader className="text-center">
-          <div className="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-            <Shield className="w-6 h-6 text-white" />
+      <Card className="w-full max-w-md mx-auto shadow-lg border-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
+        <CardHeader className="text-center space-y-2 pb-4">
+          <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Shield className="w-8 h-8 text-primary" />
           </div>
-          <CardTitle>Reset Password</CardTitle>
-          <CardDescription>
+          <CardTitle className="text-xl font-medium text-gray-900 dark:text-white">
+            Reset Password
+          </CardTitle>
+          <CardDescription className="text-gray-500 dark:text-gray-400">
             Enter your email to receive a password reset link
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
             {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
+              <Alert variant="destructive" className="border-red-200 dark:border-red-800">
+                <AlertDescription className="text-red-600 dark:text-red-400">
+                  {error}
+                </AlertDescription>
               </Alert>
             )}
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+              <Label htmlFor="email" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Email Address
+              </Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="pl-10"
+                  required
+                />
+              </div>
             </div>
           </CardContent>
-          <CardFooter className="flex flex-col space-y-2">
-            <Button type="submit" className="w-full" disabled={loading}>
+          <CardFooter className="flex flex-col space-y-3 pt-4">
+            <Button type="submit" className="w-full font-medium" disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Send Reset Link
             </Button>
             <Button
               type="button"
               variant="ghost"
-              className="w-full"
+              className="w-full font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
               onClick={() => setResetMode(false)}
             >
               Back to Sign In
@@ -108,15 +119,15 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
   }
 
   return (
-    <Card className="w-full max-w-md mx-auto">
-      <CardHeader className="text-center">
-        <div className="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center mx-auto mb-4">
-          <Shield className="w-6 h-6 text-white" />
+    <Card className="w-full max-w-md mx-auto shadow-lg border-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
+      <CardHeader className="text-center space-y-2 pb-4">
+        <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Shield className="w-8 h-8 text-primary" />
         </div>
-        <CardTitle>
+        <CardTitle className="text-xl font-medium text-gray-900 dark:text-white">
           {mode === 'signin' ? 'Welcome Back' : 'Create Account'}
         </CardTitle>
-        <CardDescription>
+        <CardDescription className="text-gray-500 dark:text-gray-400">
           {mode === 'signin' 
             ? 'Sign in to your DropAccess account' 
             : 'Sign up to start sharing securely'}
@@ -125,44 +136,77 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
+            <Alert variant="destructive" className="border-red-200 dark:border-red-800">
+              <AlertDescription className="text-red-600 dark:text-red-400">
+                {error}
+              </AlertDescription>
             </Alert>
           )}
+          
+          {/* Email Field */}
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
+            <Label htmlFor="email" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Email Address
+            </Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="pl-10"
+                required
+              />
+            </div>
           </div>
+          
+          {/* Password Field */}
           <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Enter your password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-            />
+            <Label htmlFor="password" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Password
+            </Label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pl-10 pr-10"
+                required
+                minLength={6}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            {mode === 'signup' && (
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Password must be at least 6 characters long
+              </p>
+            )}
           </div>
         </CardContent>
-        <CardFooter className="flex flex-col space-y-2">
-          <Button type="submit" className="w-full" disabled={loading}>
+        
+        <CardFooter className="flex flex-col space-y-3 pt-4">
+          <Button type="submit" className="w-full font-medium" disabled={loading}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {mode === 'signin' ? 'Sign In' : 'Sign Up'}
+            {mode === 'signin' ? 'Sign In' : 'Create Account'}
           </Button>
+          
           <div className="flex flex-col space-y-2 text-sm text-center">
             <Button
               type="button"
               variant="ghost"
               onClick={onToggleMode}
+              className="font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
             >
               {mode === 'signin' 
                 ? "Don't have an account? Sign up" 
@@ -173,11 +217,21 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
                 type="button"
                 variant="ghost"
                 onClick={() => setResetMode(true)}
+                className="text-sm font-medium text-primary hover:text-primary/80"
               >
                 Forgot password?
               </Button>
             )}
           </div>
+          
+          {/* Additional Info for Sign Up */}
+          {mode === 'signup' && (
+            <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+              <p className="text-xs text-gray-600 dark:text-gray-400 text-center">
+                By creating an account, you agree to our Terms of Service and Privacy Policy
+              </p>
+            </div>
+          )}
         </CardFooter>
       </form>
     </Card>

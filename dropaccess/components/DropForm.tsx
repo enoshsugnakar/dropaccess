@@ -12,12 +12,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useState } from "react";
-import { FileUp, Link2, Shield, Users, Clock, Info, Loader2 } from "lucide-react";
+import { useState, useRef } from "react";
+import { FileUp, Link2, Shield, Users, Clock, Info, Loader2, Upload, X, CheckCircle } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAuth } from "@/components/AuthProvider";
+import { Navbar } from "@/components/Navbar";
 
 interface FormData {
   name: string;
@@ -29,7 +30,6 @@ interface FormData {
   customExpiry: string;
   oneTimeAccess: boolean;
   sendNotifications: boolean;
-  allowDownload: boolean;
 }
 
 export function DropForm() {
@@ -38,6 +38,8 @@ export function DropForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<FormData>({
     name: "",
@@ -49,7 +51,6 @@ export function DropForm() {
     customExpiry: "",
     oneTimeAccess: false,
     sendNotifications: true,
-    allowDownload: false,
   });
 
   const updateField = (field: keyof FormData, value: any) => {
@@ -250,7 +251,7 @@ export function DropForm() {
         throw new Error("Failed to create or verify user account");
       }
 
-      // Create the drop first
+      // Create the drop first - REMOVED allow_download field
       const dropPayload = {
         owner_id: user.id,
         name: formData.name.trim(),
@@ -261,7 +262,6 @@ export function DropForm() {
         one_time_access: formData.oneTimeAccess,
         is_active: true,
         file_path: null, // Initialize as null, will update after file upload
-        allow_download: formData.dropType === "file" ? formData.allowDownload : null,
       };
 
       console.log("Creating drop with payload:", dropPayload);
@@ -349,7 +349,6 @@ export function DropForm() {
         customExpiry: "",
         oneTimeAccess: false,
         sendNotifications: true,
-        allowDownload: false,
       });
       setUploadedFile(null);
       setErrors({});
@@ -363,13 +362,9 @@ export function DropForm() {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
+  const handleFileSelection = (file: File) => {
     if (file.size > 100 * 1024 * 1024) {
       toast.error("File size must be less than 100MB");
-      e.target.value = "";
       return;
     }
     
@@ -377,6 +372,35 @@ export function DropForm() {
     // Clear file error if exists
     if (errors.file) {
       setErrors(prev => ({ ...prev, file: "" }));
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    handleFileSelection(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      handleFileSelection(files[0]);
     }
   };
 
@@ -390,36 +414,69 @@ export function DropForm() {
     }
   };
 
+  const removeFile = () => {
+    setUploadedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const openFileDialog = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const getRecipientCount = () => {
+    if (!formData.recipients.trim()) return 0;
+    return formData.recipients
+      .split(/[,\n]/)
+      .map(email => email.trim())
+      .filter(email => email.length > 0).length;
+  };
+
+  const getExpiryDisplay = () => {
+    if (formData.expiresIn === "custom") {
+      return formData.customExpiry ? new Date(formData.customExpiry).toLocaleDateString() : "Custom date";
+    }
+    const map = {
+      "1h": "1 Hour",
+      "24h": "24 Hours", 
+      "7d": "7 Days",
+      "30d": "30 Days"
+    };
+    return map[formData.expiresIn];
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 pt-20 pb-8">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <Navbar />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20">
         {/* Page Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-            <Shield className="w-8 h-8 text-purple-600" />
+          <h1 className="text-2xl font-medium text-gray-900 dark:text-white flex items-center gap-3">
+            <Shield className="w-6 h-6 text-primary" />
             Create Secure Drop
           </h1>
-          <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">
+          <p className="mt-1 text-gray-500 dark:text-gray-400">
             Share files and links securely with time-based access control
           </p>
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column */}
-            <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left Column - Main Content */}
+            <div className="lg:col-span-2 space-y-6">
               {/* Drop Details Card */}
-              <Card className="shadow-lg">
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-xl flex items-center gap-2">
-                    <Info className="w-5 h-5" />
-                    Drop Information
-                  </CardTitle>
-                  <CardDescription>Basic details about your secure drop</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                  <Info className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Drop Information</h2>
+                </div>
+                
+                <div className="space-y-4">
                   <div>
-                    <Label htmlFor="name" className="text-sm font-medium mb-1.5 block">
+                    <Label htmlFor="name" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
                       Drop Name <span className="text-red-500">*</span>
                     </Label>
                     <Input
@@ -435,7 +492,7 @@ export function DropForm() {
                   </div>
 
                   <div>
-                    <Label htmlFor="description" className="text-sm font-medium mb-1.5 block">
+                    <Label htmlFor="description" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
                       Description
                     </Label>
                     <Textarea
@@ -450,145 +507,188 @@ export function DropForm() {
                       <p className="text-sm text-red-500 mt-1">{errors.description}</p>
                     )}
                   </div>
+                </div>
+              </div>
 
-                  <div>
-                    <Label className="text-sm font-medium mb-3 block">Share Type</Label>
-                    <RadioGroup
-                      value={formData.dropType}
-                      onValueChange={handleDropTypeChange}
-                      className="space-y-2"
-                    >
-                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors">
-                        <RadioGroupItem value="url" id="url" />
-                        <Label htmlFor="url" className="flex items-center cursor-pointer flex-1">
-                          <Link2 className="w-4 h-4 mr-2 text-purple-600" />
-                          <div>
-                            <p className="font-medium">Masked URL</p>
-                            <p className="text-xs text-gray-500">Hide the destination URL</p>
-                          </div>
-                        </Label>
+              {/* Share Type Card */}
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                  <Shield className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Share Type</h2>
+                </div>
+                
+                <RadioGroup
+                  value={formData.dropType}
+                  onValueChange={handleDropTypeChange}
+                  className="space-y-3"
+                >
+                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer ${
+                    formData.dropType === "url" 
+                      ? "border-primary bg-primary/5" 
+                      : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  }`}>
+                    <RadioGroupItem value="url" id="url" />
+                    <Label htmlFor="url" className="flex items-center cursor-pointer flex-1">
+                      <Link2 className="w-5 h-5 mr-3 text-primary" />
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-white">Masked URL</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Hide the destination URL from recipients</p>
                       </div>
-                      <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors">
-                        <RadioGroupItem value="file" id="file" />
-                        <Label htmlFor="file" className="flex items-center cursor-pointer flex-1">
-                          <FileUp className="w-4 h-4 mr-2 text-purple-600" />
-                          <div>
-                            <p className="font-medium">File Upload</p>
-                            <p className="text-xs text-gray-500">Share a secure file</p>
-                          </div>
-                        </Label>
-                      </div>
-                    </RadioGroup>
+                    </Label>
                   </div>
+                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer ${
+                    formData.dropType === "file" 
+                      ? "border-primary bg-primary/5" 
+                      : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  }`}>
+                    <RadioGroupItem value="file" id="file" />
+                    <Label htmlFor="file" className="flex items-center cursor-pointer flex-1">
+                      <FileUp className="w-5 h-5 mr-3 text-primary" />
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-white">File Upload</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Share a secure file with recipients</p>
+                      </div>
+                    </Label>
+                  </div>
+                </RadioGroup>
 
-                  {formData.dropType === "url" && (
-                    <div>
-                      <Label htmlFor="maskedUrl" className="text-sm font-medium mb-1.5 block">
-                        URL to Mask <span className="text-red-500">*</span>
-                      </Label>
-                      <Input
-                        id="maskedUrl"
-                        value={formData.maskedUrl}
-                        onChange={(e) => updateField("maskedUrl", e.target.value)}
-                        placeholder="https://example.com/sensitive-document"
-                        className={errors.maskedUrl ? "border-red-500 focus:ring-red-500" : ""}
-                      />
-                      {errors.maskedUrl && (
-                        <p className="text-sm text-red-500 mt-1">{errors.maskedUrl}</p>
-                      )}
-                    </div>
-                  )}
+                {formData.dropType === "url" && (
+                  <div className="mt-4">
+                    <Label htmlFor="maskedUrl" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+                      URL to Mask <span className="text-red-500">*</span>
+                    </Label>
+                    <Input
+                      id="maskedUrl"
+                      value={formData.maskedUrl}
+                      onChange={(e) => updateField("maskedUrl", e.target.value)}
+                      placeholder="https://docs.google.com/sensitive-document"
+                      className={errors.maskedUrl ? "border-red-500 focus:ring-red-500" : ""}
+                    />
+                    {errors.maskedUrl && (
+                      <p className="text-sm text-red-500 mt-1">{errors.maskedUrl}</p>
+                    )}
+                  </div>
+                )}
 
-                  {formData.dropType === "file" && (
-                    <div>
-                      <Label htmlFor="file" className="text-sm font-medium mb-1.5 block">
-                        Upload File <span className="text-red-500">*</span>
-                      </Label>
-                      <Input
-                        id="file"
-                        type="file"
-                        onChange={handleFileChange}
-                        className="cursor-pointer"
-                        accept="*/*"
-                      />
-                      {errors.file && (
-                        <p className="text-sm text-red-500 mt-1">{errors.file}</p>
-                      )}
-                      {uploadedFile && (
-                        <div className="mt-2 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-md">
-                          <p className="text-sm text-purple-700 dark:text-purple-300 font-medium truncate">
-                            {uploadedFile.name}
-                          </p>
-                          <p className="text-xs text-purple-600 dark:text-purple-400">
-                            {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
-                        </div>
-                      )}
-                      <p className="text-xs text-gray-500 mt-1">Maximum file size: 100MB</p>
-                    </div>
+                {formData.dropType === "file" && (
+                  <div className="mt-4">
+                    <Label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+                      Upload File <span className="text-red-500">*</span>
+                    </Label>
                     
-                  )}
-                  {formData.dropType === "file" && (
-  <div className="space-y-3 pt-2">
-    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
-      <Label htmlFor="allowDownload" className="cursor-pointer">
-        <p className="font-medium text-sm">Allow Downloads</p>
-        <p className="text-xs text-gray-500">Recipients can download the file</p>
-      </Label>
-      <Switch
-        id="allowDownload"
-        checked={formData.allowDownload}
-        onCheckedChange={(checked) => updateField("allowDownload", checked)}
-      />
-    </div>
-  </div>
-)}
-                </CardContent>
-              </Card>
+                    {!uploadedFile ? (
+                      <div>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          onChange={handleFileChange}
+                          className="hidden"
+                          accept="*/*"
+                        />
+                        <div
+                          onDragOver={handleDragOver}
+                          onDragLeave={handleDragLeave}
+                          onDrop={handleDrop}
+                          onClick={openFileDialog}
+                          className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-all duration-200 ${
+                            isDragOver
+                              ? "border-primary bg-primary/10 scale-[1.02]"
+                              : errors.file 
+                                ? "border-red-500 bg-red-50 dark:bg-red-900/20" 
+                                : "border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-400 dark:hover:border-gray-500"
+                          }`}
+                        >
+                          <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                            <Upload className={`w-8 h-8 mb-2 transition-colors ${isDragOver ? "text-primary" : "text-gray-400"}`} />
+                            <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                              <span className="font-medium">Click to upload</span> or drag and drop
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">Maximum file size: 100MB</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <CheckCircle className="w-5 h-5 text-green-600" />
+                            <div>
+                              <p className="font-medium text-gray-900 dark:text-white truncate max-w-xs">
+                                {uploadedFile.name}
+                              </p>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={removeFile}
+                            className="text-gray-500 hover:text-red-500"
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {errors.file && (
+                      <p className="text-sm text-red-500 mt-1">{errors.file}</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Access Control Card */}
-              <Card className="shadow-lg">
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-xl flex items-center gap-2">
-                    <Clock className="w-5 h-5" />
-                    Access Control
-                  </CardTitle>
-                  <CardDescription>Set time limits and access rules</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                  <Clock className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Access Control</h2>
+                </div>
+                
+                <div className="space-y-4">
                   <div>
-                    <Label className="text-sm font-medium mb-3 block">Expiration Time</Label>
+                    <Label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 block">Expiration Time</Label>
                     <RadioGroup
                       value={formData.expiresIn}
                       onValueChange={(value) => updateField("expiresIn", value)}
-                      className="grid grid-cols-2 gap-2"
+                      className="grid grid-cols-2 gap-3"
                     >
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                        <RadioGroupItem value="1h" id="1h" />
-                        <Label htmlFor="1h" className="cursor-pointer text-sm">1 Hour</Label>
-                      </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                        <RadioGroupItem value="24h" id="24h" />
-                        <Label htmlFor="24h" className="cursor-pointer text-sm">24 Hours</Label>
-                      </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                        <RadioGroupItem value="7d" id="7d" />
-                        <Label htmlFor="7d" className="cursor-pointer text-sm">7 Days</Label>
-                      </div>
-                      <div className="flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                        <RadioGroupItem value="30d" id="30d" />
-                        <Label htmlFor="30d" className="cursor-pointer text-sm">30 Days</Label>
-                      </div>
-                      <div className="col-span-2 flex items-center space-x-2 p-2 rounded-md border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                      {[
+                        { value: "1h", label: "1 Hour" },
+                        { value: "24h", label: "24 Hours" },
+                        { value: "7d", label: "7 Days" },
+                        { value: "30d", label: "30 Days" }
+                      ].map((option) => (
+                        <div key={option.value} className={`flex items-center space-x-2 p-3 rounded-lg border-2 transition-colors cursor-pointer ${
+                          formData.expiresIn === option.value 
+                            ? "border-primary bg-primary/5" 
+                            : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        }`}>
+                          <RadioGroupItem value={option.value} id={option.value} />
+                          <Label htmlFor={option.value} className="cursor-pointer font-medium text-gray-900 dark:text-white">
+                            {option.label}
+                          </Label>
+                        </div>
+                      ))}
+                      <div className={`col-span-2 flex items-center space-x-2 p-3 rounded-lg border-2 transition-colors cursor-pointer ${
+                        formData.expiresIn === "custom" 
+                          ? "border-primary bg-primary/5" 
+                          : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                      }`}>
                         <RadioGroupItem value="custom" id="custom" />
-                        <Label htmlFor="custom" className="cursor-pointer text-sm">Custom Date & Time</Label>
+                        <Label htmlFor="custom" className="cursor-pointer font-medium text-gray-900 dark:text-white">
+                          Custom Date & Time
+                        </Label>
                       </div>
                     </RadioGroup>
                   </div>
 
                   {formData.expiresIn === "custom" && (
                     <div>
-                      <Label htmlFor="customExpiry" className="text-sm font-medium mb-1.5 block">
+                      <Label htmlFor="customExpiry" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
                         Custom Expiry <span className="text-red-500">*</span>
                       </Label>
                       <Input
@@ -605,11 +705,11 @@ export function DropForm() {
                     </div>
                   )}
 
-                  <div className="space-y-3 pt-2">
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50">
                       <Label htmlFor="oneTimeAccess" className="cursor-pointer">
-                        <p className="font-medium text-sm">One-time Access</p>
-                        <p className="text-xs text-gray-500">Expires after first view</p>
+                        <p className="font-medium text-gray-900 dark:text-white">One-time Access</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Drop expires after first view</p>
                       </Label>
                       <Switch
                         id="oneTimeAccess"
@@ -618,24 +718,22 @@ export function DropForm() {
                       />
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </div>
 
-            {/* Right Column */}
+            {/* Right Column - Recipients & Summary */}
             <div className="space-y-6">
               {/* Recipients Card */}
-              <Card className="shadow-lg h-full">
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-xl flex items-center gap-2">
-                    <Users className="w-5 h-5" />
-                    Recipients
-                  </CardTitle>
-                  <CardDescription>Who can access this drop?</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                  <Users className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Recipients</h2>
+                </div>
+                
+                <div className="space-y-4">
                   <div>
-                    <Label htmlFor="recipients" className="text-sm font-medium mb-1.5 block">
+                    <Label htmlFor="recipients" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
                       Email Addresses <span className="text-red-500">*</span>
                     </Label>
                     <Textarea
@@ -643,73 +741,93 @@ export function DropForm() {
                       value={formData.recipients}
                       onChange={(e) => updateField("recipients", e.target.value)}
                       placeholder="john@example.com, jane@example.com&#10;&#10;or enter one email per line..."
-                      rows={12}
+                      rows={8}
                       className={`resize-none font-mono text-sm ${errors.recipients ? "border-red-500 focus:ring-red-500" : ""}`}
                     />
                     {errors.recipients && (
                       <p className="text-sm text-red-500 mt-1">{errors.recipients}</p>
                     )}
-                    <p className="text-xs text-gray-500 mt-2">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                       Separate multiple emails with commas or new lines
                     </p>
                   </div>
 
-                  <div className="pt-4">
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
-                      <Label htmlFor="sendNotifications" className="cursor-pointer">
-                        <p className="font-medium text-sm">Email Notifications</p>
-                        <p className="text-xs text-gray-500">Notify recipients when drop is created</p>
-                      </Label>
-                      <Switch
-                        id="sendNotifications"
-                        checked={formData.sendNotifications}
-                        onCheckedChange={(checked) => updateField("sendNotifications", checked)}
-                      />
-                    </div>
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                    <Label htmlFor="sendNotifications" className="cursor-pointer">
+                      <p className="font-medium text-gray-900 dark:text-white">Email Notifications</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Notify recipients when drop is created</p>
+                    </Label>
+                    <Switch
+                      id="sendNotifications"
+                      checked={formData.sendNotifications}
+                      onCheckedChange={(checked) => updateField("sendNotifications", checked)}
+                    />
                   </div>
+                </div>
+              </div>
 
-                  {/* Summary */}
-                  <div className="mt-6 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                    <h4 className="text-sm font-medium text-purple-900 dark:text-purple-100 mb-2">Drop Summary</h4>
-                    <ul className="space-y-1 text-xs text-purple-700 dark:text-purple-300">
-                      <li>• Type: {formData.dropType === "url" ? "Masked URL" : "File Upload"}</li>
-                      <li>• Expires: {formData.expiresIn === "custom" ? "Custom date" : formData.expiresIn}</li>
-                      <li>• One-time access: {formData.oneTimeAccess ? "Yes" : "No"}</li>
-                      <li>• Notifications: {formData.sendNotifications ? "Enabled" : "Disabled"}</li>
-                    </ul>
+              {/* Summary Card */}
+              <div className="bg-primary/5 border border-primary/20 rounded-xl p-6">
+                <h3 className="font-medium text-gray-900 dark:text-white mb-4">Drop Summary</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Type:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {formData.dropType === "url" ? "Masked URL" : "File Upload"}
+                    </span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Recipients:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{getRecipientCount()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Expires:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{getExpiryDisplay()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">One-time:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {formData.oneTimeAccess ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Notifications:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {formData.sendNotifications ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-                  {/* Action Buttons */}
-                  <div className="flex justify-end space-x-3 pt-6">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => router.push("/dashboard")}
-                      disabled={isSubmitting}
-                      className="px-6"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="px-6 bg-purple-600 hover:bg-purple-700"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Creating Drop...
-                        </>
-                      ) : (
-                        <>
-                          <Shield className="w-4 h-4 mr-2" />
-                          Create Secure Drop
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              {/* Action Buttons */}
+              <div className="flex flex-col gap-3">
+                <Button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full font-medium py-3"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating Drop...
+                    </>
+                  ) : (
+                    <>
+                      <Shield className="w-4 h-4 mr-2" />
+                      Create Secure Drop
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => router.push("/dashboard")}
+                  disabled={isSubmitting}
+                  className="w-full font-medium"
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           </div>
         </form>

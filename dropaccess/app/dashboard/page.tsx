@@ -28,7 +28,8 @@ import {
   Grid3X3,
   List,
   ChevronRight,
-  Activity
+  Activity,
+  RefreshCw
 } from 'lucide-react'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
@@ -53,6 +54,177 @@ interface Drop {
   created_at: string
   recipient_count?: number
   access_count?: number
+}
+
+// Cache management
+interface CacheData {
+  drops: Drop[]
+  stats: {
+    totalDrops: number
+    activeDrops: number
+    totalAccesses: number
+    totalRecipients: number
+  }
+  timestamp: number
+}
+
+const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+const CACHE_KEY = 'dashboard_data'
+
+// Skeleton Components
+function StatCardSkeleton() {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
+      <div className="flex items-center justify-between mb-3">
+        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
+        <div className="w-4 h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+      </div>
+      <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-12 animate-pulse"></div>
+    </div>
+  )
+}
+
+function DropCardSkeleton() {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex items-center space-x-3 flex-1">
+          <div className="w-9 h-9 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>
+          <div className="flex-1 min-w-0">
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 mb-1 animate-pulse"></div>
+            <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
+          </div>
+        </div>
+        <div className="w-8 h-8 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+      </div>
+      
+      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-16 mb-4 animate-pulse"></div>
+      
+      <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-full mb-4 animate-pulse"></div>
+
+      <div className="space-y-2 mb-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center justify-between">
+            <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
+            <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-8 animate-pulse"></div>
+          </div>
+        ))}
+      </div>
+
+      <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-full animate-pulse"></div>
+    </div>
+  )
+}
+
+function TableRowSkeleton() {
+  return (
+    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+      <td className="px-6 py-4">
+        <div className="flex items-center">
+          <div className="w-8 h-8 bg-gray-200 dark:bg-gray-700 rounded-lg mr-3 animate-pulse"></div>
+          <div>
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 mb-1 animate-pulse"></div>
+            <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div>
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4">
+        <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
+      </td>
+      <td className="px-6 py-4">
+        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-8 animate-pulse"></div>
+      </td>
+      <td className="px-6 py-4">
+        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-8 animate-pulse"></div>
+      </td>
+      <td className="px-6 py-4">
+        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
+      </td>
+      <td className="px-6 py-4">
+        <div className="w-8 h-8 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+      </td>
+    </tr>
+  )
+}
+
+function DashboardSkeleton({ viewMode }: { viewMode: 'grid' | 'list' }) {
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <Navbar />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20">
+        {/* Header Skeleton */}
+        <div className="mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
+            <div className="mb-6 lg:mb-0">
+              <div className="flex items-center gap-3 mb-2">
+                <Shield className="w-6 h-6 text-primary" />
+                <div className="h-7 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
+              </div>
+              <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-48 animate-pulse"></div>
+            </div>
+            <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded-lg w-32 animate-pulse"></div>
+          </div>
+        </div>
+
+        {/* Stats Skeleton */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+          {[1, 2, 3, 4].map((i) => (
+            <StatCardSkeleton key={i} />
+          ))}
+        </div>
+
+        {/* Controls Skeleton */}
+        <div className="mb-6">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div className="flex flex-col sm:flex-row gap-4 flex-1">
+              <div className="relative flex-1 max-w-md">
+                <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>
+              </div>
+              <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded-lg w-40 animate-pulse"></div>
+            </div>
+            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+              <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-8 animate-pulse"></div>
+              <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-8 animate-pulse"></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Content Skeleton */}
+        {viewMode === 'grid' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <DropCardSkeleton key={i} />
+            ))}
+          </div>
+        ) : (
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+              <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-32 mb-1 animate-pulse"></div>
+              <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-48 animate-pulse"></div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 dark:bg-gray-700">
+                  <tr>
+                    {['Drop', 'Status', 'Recipients', 'Views', 'Expires', 'Actions'].map((header) => (
+                      <th key={header} className="px-6 py-3 text-left">
+                        <div className="h-3 bg-gray-200 dark:bg-gray-600 rounded w-16 animate-pulse"></div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <TableRowSkeleton key={i} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // Custom Dropdown Component
@@ -125,8 +297,10 @@ export default function DashboardPage() {
   const [filteredDrops, setFilteredDrops] = useState<Drop[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'expired' | 'inactive'>('all')
+  const [lastFetch, setLastFetch] = useState<number>(0)
   const [stats, setStats] = useState({
     totalDrops: 0,
     activeDrops: 0,
@@ -134,17 +308,84 @@ export default function DashboardPage() {
     totalRecipients: 0
   })
 
+  // Check if data is cached and still valid
+  const isCacheValid = (timestamp: number) => {
+    return Date.now() - timestamp < CACHE_DURATION
+  }
+
+  // Load data from cache if available
+  const loadFromCache = (): CacheData | null => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY)
+      if (cached) {
+        const data: CacheData = JSON.parse(cached)
+        if (isCacheValid(data.timestamp)) {
+          return data
+        }
+      }
+    } catch (error) {
+      console.error('Error loading cache:', error)
+    }
+    return null
+  }
+
+  // Save data to cache
+  const saveToCache = (drops: Drop[], stats: any) => {
+    try {
+      const cacheData: CacheData = {
+        drops,
+        stats,
+        timestamp: Date.now()
+      }
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cacheData))
+    } catch (error) {
+      console.error('Error saving cache:', error)
+    }
+  }
+
+  // Clear cache
+  const clearCache = () => {
+    try {
+      localStorage.removeItem(CACHE_KEY)
+    } catch (error) {
+      console.error('Error clearing cache:', error)
+    }
+  }
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/auth')
     } else if (user) {
-      fetchDrops()
+      // Try to load from cache first
+      const cachedData = loadFromCache()
+      
+      if (cachedData) {
+        // Use cached data
+        setDrops(cachedData.drops)
+        setStats(cachedData.stats)
+        applyFilters(cachedData.drops, searchQuery, filterStatus)
+        setLastFetch(cachedData.timestamp)
+        setIsLoading(false)
+      } else {
+        // Fetch fresh data
+        fetchDrops()
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, loading])
 
-  const fetchDrops = async () => {
-    setIsLoading(true)
+  const fetchDrops = async (forceRefresh = false) => {
+    // If we just fetched recently and it's not a forced refresh, skip
+    if (!forceRefresh && isCacheValid(lastFetch)) {
+      return
+    }
+
+    if (forceRefresh) {
+      setIsRefreshing(true)
+    } else {
+      setIsLoading(true)
+    }
+
     try {
       const { data: dropsData, error: dropsError } = await supabase
         .from('drops')
@@ -155,6 +396,7 @@ export default function DashboardPage() {
         `)
         .eq('owner_id', user?.id)
         .order('created_at', { ascending: false })
+      
       if (dropsError) throw dropsError
 
       const processedDrops = (dropsData || []).map((drop: any) => ({
@@ -167,9 +409,6 @@ export default function DashboardPage() {
           : 0,
       }))
 
-      setDrops(processedDrops)
-      applyFilters(processedDrops, searchQuery, filterStatus)
-
       const active = processedDrops.filter(d =>
         d.is_active && new Date(d.expires_at) > new Date()
       ).length
@@ -177,18 +416,36 @@ export default function DashboardPage() {
       const totalAccesses = processedDrops.reduce((sum, d) => sum + (d.access_count || 0), 0)
       const totalRecipients = processedDrops.reduce((sum, d) => sum + (d.recipient_count || 0), 0)
 
-      setStats({
+      const newStats = {
         totalDrops: processedDrops.length,
         activeDrops: active,
         totalAccesses,
         totalRecipients
-      })
+      }
+
+      setDrops(processedDrops)
+      setStats(newStats)
+      applyFilters(processedDrops, searchQuery, filterStatus)
+      setLastFetch(Date.now())
+
+      // Save to cache
+      saveToCache(processedDrops, newStats)
+
+      if (forceRefresh) {
+        toast.success('Dashboard refreshed')
+      }
     } catch (error) {
       console.error('Error fetching drops:', error)
       toast.error('Failed to load drops')
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
+  }
+
+  const handleRefresh = () => {
+    clearCache()
+    fetchDrops(true)
   }
 
   const applyFilters = (dropsList: Drop[], search: string, status: string) => {
@@ -232,7 +489,7 @@ export default function DashboardPage() {
 
   const copyDropLink = async (dropId: string) => {
     try {
-      const link = `${window.location.origin}/access/${dropId}`
+      const link = `${window.location.origin}/drops/${dropId}`
       await navigator.clipboard.writeText(link)
       toast.success('Link copied to clipboard')
     } catch (err) {
@@ -253,7 +510,9 @@ export default function DashboardPage() {
       if (error) throw error
 
       toast.success('Drop deleted')
-      fetchDrops()
+      // Clear cache and refresh data
+      clearCache()
+      fetchDrops(true)
     } catch (error) {
       console.error('Error deleting drop:', error)
       toast.error('Failed to delete drop')
@@ -301,39 +560,36 @@ export default function DashboardPage() {
     })
   }
 
+  // Show skeleton while loading initial data
   if (loading || isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <Navbar />
-        <div className="flex items-center justify-center h-96">
-          <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent"></div>
-        </div>
-      </div>
-    )
+    return <DashboardSkeleton viewMode={viewMode} />
   }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <Navbar />
+     <Navbar/>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20 mt-5">
         {/* Header */}
         <div className="mb-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
             <div className="mb-6 lg:mb-0">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                
+            
                 Dashboard
               </h1>
               <p className="mt-1 text-gray-500 dark:text-gray-400">
                 Manage your secure drops
               </p>
             </div>
-            <Link href="/drops/new">
-              <Button className="px-5 py-2.5 rounded-lg font-medium">
-                <Plus className="w-4 h-4 mr-2" />
-                Create Drop
-              </Button>
-            </Link>
+            <div className="flex items-center gap-3">
+              
+              <Link href="/drops/new">
+                <Button className="px-5 py-2.5 rounded-lg font-medium">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Drop
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -406,6 +662,18 @@ export default function DashboardPage() {
                   <SelectItem value="inactive">Inactive</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="font-medium"
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+              </Button>
             </div>
             <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
               <Button
@@ -555,7 +823,7 @@ export default function DashboardPage() {
             })}
           </div>
         ) : (
-          /* List View */
+          /* List View - Same as before but with all the grid content */
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
               <h3 className="text-lg font-medium text-gray-900 dark:text-white">Your Drops</h3>

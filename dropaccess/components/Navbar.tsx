@@ -241,13 +241,13 @@ export function Navbar() {
 
               {user ? (
                 <>
-                  {/* Single Create Button */}
+                  {/* Single Create Button 
                   <Link href="/drops/new">
                     <Button size="sm" className="font-medium">
                       <Plus className="w-4 h-4 mr-2" />
                       Create Drop
                     </Button>
-                  </Link>
+                  </Link>*/}
 
                   {/* Notifications - Desktop only */}
                   <Button variant="ghost" size="sm" className="hidden md:flex w-9 h-9 p-0">
@@ -271,7 +271,7 @@ export function Navbar() {
                       <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {user.email?.split('@')[0]}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                         {user.email}
                       </p>
                     </div>
@@ -358,14 +358,14 @@ export function Navbar() {
             </div>
 
             {/* Create Drop Button - Mobile */}
-            <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+            {/*<div className="p-4 border-b border-gray-200 dark:border-gray-700">
               <Link href="/drops/new" className="block">
                 <Button className="w-full font-medium">
                   <Plus className="w-4 h-4 mr-2" />
                   Create Drop
                 </Button>
               </Link>
-            </div>
+            </div>}
 
             {/* Navigation Items */}
             <div className="p-4 space-y-2">
