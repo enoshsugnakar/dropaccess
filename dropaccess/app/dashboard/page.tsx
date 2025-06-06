@@ -357,7 +357,7 @@ export default function DashboardPage() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem asChild>
-                                <Link href={`/drops/${drop.id}`} className="flex items-center">
+                                <Link href={`/drops/${drop.id}/manage`} className="flex items-center">
                                   <ExternalLink className="w-4 h-4 mr-2" />
                                   View Drop
                                 </Link>
