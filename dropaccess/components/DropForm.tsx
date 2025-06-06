@@ -29,6 +29,7 @@ interface FormData {
   customExpiry: string;
   oneTimeAccess: boolean;
   sendNotifications: boolean;
+  allowDownload: boolean;
 }
 
 export function DropForm() {
@@ -48,6 +49,7 @@ export function DropForm() {
     customExpiry: "",
     oneTimeAccess: false,
     sendNotifications: true,
+    allowDownload: false,
   });
 
   const updateField = (field: keyof FormData, value: any) => {
@@ -193,19 +195,34 @@ export function DropForm() {
     }
   };
 
+  // Fixed file upload function - matches storage policy structure
   const handleFileUpload = async (file: File, dropId: string): Promise<string> => {
-    const fileExt = file.name.split(".").pop() ?? "bin";
-    const randomPortion = Math.random().toString(36).substring(2, 15);
-    const fileName = `${dropId}/${randomPortion}.${fileExt}`;
-    const filePath = `drops/${fileName}`;
+    if (!user) throw new Error("User not authenticated");
     
-    const { error: uploadError } = await supabase.storage
+    const fileExt = file.name.split(".").pop() ?? "bin";
+    const timestamp = Date.now();
+    const randomPortion = Math.random().toString(36).substring(2, 10);
+    const fileName = `${timestamp}_${randomPortion}.${fileExt}`;
+    
+    // Path structure: userId/dropId/filename
+    // This matches the storage policy: auth.uid()::text = (storage.foldername(name))[1]
+    const filePath = `${user.id}/${dropId}/${fileName}`;
+    
+    console.log("Uploading file to path:", filePath);
+    
+    const { error: uploadError, data: uploadData } = await supabase.storage
       .from("drops")
-      .upload(filePath, file);
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
 
     if (uploadError) {
+      console.error("File upload error:", uploadError);
       throw uploadError;
     }
+    
+    console.log("File uploaded successfully:", uploadData);
     return filePath;
   };
 
@@ -224,6 +241,8 @@ export function DropForm() {
     }
 
     setIsSubmitting(true);
+    let insertedDrop: any = null;
+    
     try {
       // First, ensure the user exists in the users table
       const userExists = await ensureUserExists();
@@ -231,6 +250,7 @@ export function DropForm() {
         throw new Error("Failed to create or verify user account");
       }
 
+      // Create the drop first
       const dropPayload = {
         owner_id: user.id,
         name: formData.name.trim(),
@@ -240,32 +260,51 @@ export function DropForm() {
         description: formData.description.trim() || null,
         one_time_access: formData.oneTimeAccess,
         is_active: true,
+        file_path: null, // Initialize as null, will update after file upload
+        allow_download: formData.dropType === "file" ? formData.allowDownload : null,
       };
 
       console.log("Creating drop with payload:", dropPayload);
 
-      const { data: insertedDrop, error: dropError } = await supabase
+      const { data: dropData, error: dropError } = await supabase
         .from("drops")
         .insert(dropPayload)
         .select()
         .single();
 
-      if (dropError || !insertedDrop) {
+      if (dropError || !dropData) {
         console.error("Drop creation error:", dropError);
         throw dropError ?? new Error("Failed to create drop");
       }
 
+      insertedDrop = dropData;
       console.log("Drop created successfully:", insertedDrop);
 
       // Handle file upload if needed
       if (formData.dropType === "file" && uploadedFile) {
-        const fullPath = await handleFileUpload(uploadedFile, insertedDrop.id);
-        const { error: updateError } = await supabase
-          .from("drops")
-          .update({ file_path: fullPath })
-          .eq("id", insertedDrop.id);
+        try {
+          console.log("Starting file upload for drop:", insertedDrop.id);
+          const filePath = await handleFileUpload(uploadedFile, insertedDrop.id);
+          
+          console.log("File uploaded, updating drop with file_path:", filePath);
+          const { error: updateError } = await supabase
+            .from("drops")
+            .update({ file_path: filePath })
+            .eq("id", insertedDrop.id)
+            .eq("owner_id", user.id); // Add owner_id check for RLS
 
-        if (updateError) throw updateError;
+          if (updateError) {
+            console.error("Error updating drop with file path:", updateError);
+            throw updateError;
+          }
+          
+          console.log("Drop updated with file path successfully");
+        } catch (fileError) {
+          console.error("File upload failed:", fileError);
+          // Cleanup: delete the drop if file upload fails
+          await supabase.from("drops").delete().eq("id", insertedDrop.id);
+          throw new Error(`File upload failed: {fileError.message}`);
+        }
       }
 
       // Process recipients
@@ -274,18 +313,22 @@ export function DropForm() {
         .map((email) => email.trim())
         .filter((email) => email.length > 0);
 
-      const recipientsPayload = recipientEmails.map((email) => ({
-        drop_id: insertedDrop.id,
-        email,
-      }));
+      if (recipientEmails.length > 0) {
+        const recipientsPayload = recipientEmails.map((email) => ({
+          drop_id: insertedDrop.id,
+          email,
+        }));
 
-      const { error: recipientsError } = await supabase
-        .from("drop_recipients")
-        .insert(recipientsPayload);
+        const { error: recipientsError } = await supabase
+          .from("drop_recipients")
+          .insert(recipientsPayload);
 
-      if (recipientsError) {
-        console.error("Recipients error:", recipientsError);
-        throw recipientsError;
+        if (recipientsError) {
+          console.error("Recipients error:", recipientsError);
+          throw recipientsError;
+        }
+
+        console.log("Recipients added successfully");
       }
 
       // Send notifications if enabled
@@ -306,6 +349,7 @@ export function DropForm() {
         customExpiry: "",
         oneTimeAccess: false,
         sendNotifications: true,
+        allowDownload: false,
       });
       setUploadedFile(null);
       setErrors({});
@@ -340,6 +384,9 @@ export function DropForm() {
     updateField("dropType", value);
     if (value === "file") {
       updateField("maskedUrl", "");
+    }
+    if (value === "url") {
+      setUploadedFile(null);
     }
   };
 
@@ -479,7 +526,23 @@ export function DropForm() {
                       )}
                       <p className="text-xs text-gray-500 mt-1">Maximum file size: 100MB</p>
                     </div>
+                    
                   )}
+                  {formData.dropType === "file" && (
+  <div className="space-y-3 pt-2">
+    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
+      <Label htmlFor="allowDownload" className="cursor-pointer">
+        <p className="font-medium text-sm">Allow Downloads</p>
+        <p className="text-xs text-gray-500">Recipients can download the file</p>
+      </Label>
+      <Switch
+        id="allowDownload"
+        checked={formData.allowDownload}
+        onCheckedChange={(checked) => updateField("allowDownload", checked)}
+      />
+    </div>
+  </div>
+)}
                 </CardContent>
               </Card>
 
