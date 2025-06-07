@@ -20,7 +20,12 @@ import {
   CalendarDays,
   UserCheck,
   Volume2,
-  ExternalLink
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Globe,
+  FileText,
+  Hash
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -47,13 +52,15 @@ interface VerificationSession {
   contentUrl?: string
   contentType?: string
   dropData?: DropData
-  pdfPages?: PDFPageData[] // Cache converted PDF pages
+  pdfPages?: PDFPageData[]
 }
 
 interface PDFLink {
   url: string
-  rect: [number, number, number, number] // [x1, y1, x2, y2]
+  text: string
+  rect: [number, number, number, number]
   pageIndex: number
+  type: 'external' | 'internal' | 'email' | 'other'
 }
 
 interface PDFPageData {
@@ -74,7 +81,6 @@ export default function DropAccessPage() {
   const params = useParams()
   const router = useRouter()
   const dropId = params.id as string
-  const pdfContainerRef = useRef<HTMLDivElement>(null)
 
   // State management
   const [viewMode, setViewMode] = useState<ViewMode>('loading')
@@ -95,14 +101,18 @@ export default function DropAccessPage() {
   const [pdfPages, setPdfPages] = useState<PDFPageData[]>([])
   const [totalPages, setTotalPages] = useState(0)
   const [loadingProgress, setLoadingProgress] = useState(0)
-  const [hoveredLink, setHoveredLink] = useState<string | null>(null)
 
-  // Enhanced security with selective pointer events
+  // Links dropdown state
+  const [showLinksDropdown, setShowLinksDropdown] = useState(false)
+  const [allLinks, setAllLinks] = useState<PDFLink[]>([])
+
+  // Enhanced security
   useEffect(() => {
     const preventContext = (e: Event) => {
-      // Allow link clicks but prevent context menu
-      if ((e.target as HTMLElement)?.classList.contains('pdf-link-hotspot')) {
-        return // Allow link interactions
+      // Allow dropdown interactions
+      const target = e.target as HTMLElement
+      if (target?.closest('.pdf-links-dropdown') || target?.closest('.pdf-links-trigger')) {
+        return
       }
       e.preventDefault()
       e.stopPropagation()
@@ -129,8 +139,9 @@ export default function DropAccessPage() {
 
     const preventSelection = (e: Event) => {
       if (viewMode === 'content') {
-        // Allow selection on link hotspots
-        if ((e.target as HTMLElement)?.classList.contains('pdf-link-hotspot')) {
+        // Allow selection on dropdown
+        const target = e.target as HTMLElement
+        if (target?.closest('.pdf-links-dropdown') || target?.closest('.pdf-links-trigger')) {
           return
         }
         e.preventDefault()
@@ -143,7 +154,7 @@ export default function DropAccessPage() {
       return false
     }
 
-    // Security CSS with selective pointer events
+    // Security CSS
     const style = document.createElement('style')
     style.innerHTML = `
       * {
@@ -155,7 +166,7 @@ export default function DropAccessPage() {
         -webkit-tap-highlight-color: transparent !important;
       }
       
-      input, textarea, [contenteditable="true"] {
+      input, textarea, [contenteditable="true"], .pdf-links-dropdown, .pdf-links-trigger {
         -webkit-user-select: text !important;
         -moz-user-select: text !important;
         -ms-user-select: text !important;
@@ -180,58 +191,24 @@ export default function DropAccessPage() {
         pointer-events: none !important;
       }
 
-      .pdf-link-hotspot {
-        position: absolute;
+      .pdf-links-trigger {
+        pointer-events: auto !important;
         cursor: pointer !important;
-        transition: all 0.2s ease;
-        border: 2px solid transparent;
-        background: rgba(0, 123, 255, 0.1);
+        z-index: 100 !important;
+      }
+
+      .pdf-links-dropdown {
         pointer-events: auto !important;
-        z-index: 60;
+        z-index: 101 !important;
       }
 
-      .pdf-link-hotspot:hover {
-        background: rgba(0, 123, 255, 0.2) !important;
-        border-color: rgba(0, 123, 255, 0.5) !important;
-        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3) !important;
-      }
-
-      .pdf-link-tooltip {
-        position: absolute;
-        bottom: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.9);
-        color: white;
-        padding: 8px 12px;
-        border-radius: 6px;
-        font-size: 12px;
-        white-space: nowrap;
-        z-index: 70;
-        margin-bottom: 8px;
-        pointer-events: none;
-        max-width: 300px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .pdf-link-tooltip::after {
-        content: '';
-        position: absolute;
-        top: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        border: 4px solid transparent;
-        border-top-color: rgba(0, 0, 0, 0.9);
-      }
-
-      /* Prevent right-click on everything except links */
-      .pdf-page-container * {
-        pointer-events: none;
-      }
-
-      .pdf-link-hotspot {
+      .pdf-link-item {
         pointer-events: auto !important;
+        cursor: pointer !important;
+      }
+
+      .pdf-link-item:hover {
+        background-color: rgba(59, 130, 246, 0.1) !important;
       }
 
       @media print {
@@ -279,6 +256,21 @@ export default function DropAccessPage() {
     }
   }, [viewMode])
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target?.closest('.pdf-links-dropdown') && !target?.closest('.pdf-links-trigger')) {
+        setShowLinksDropdown(false)
+      }
+    }
+
+    if (showLinksDropdown) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [showLinksDropdown])
+
   // PDF Cache Management
   const savePdfToCache = (url: string, pages: PDFPageData[]) => {
     try {
@@ -302,11 +294,7 @@ export default function DropAccessPage() {
 
       const cacheData = JSON.parse(cached)
       
-      // Check if cache is expired or URL changed
-      if (
-        cacheData.expiresAt < Date.now() ||
-        cacheData.url !== url
-      ) {
+      if (cacheData.expiresAt < Date.now() || cacheData.url !== url) {
         localStorage.removeItem(`${PDF_CACHE_KEY}_${dropId}`)
         return null
       }
@@ -327,11 +315,93 @@ export default function DropAccessPage() {
     }
   }
 
-  // Convert PDF to images with caching
+  // Determine link type
+  const getLinkType = (url: string): 'external' | 'internal' | 'email' | 'other' => {
+    try {
+      if (url.startsWith('mailto:')) return 'email'
+      if (url.startsWith('#')) return 'internal'
+      if (url.startsWith('http://') || url.startsWith('https://')) return 'external'
+      return 'other'
+    } catch {
+      return 'other'
+    }
+  }
+
+  // Get link icon
+  const getLinkIcon = (type: 'external' | 'internal' | 'email' | 'other') => {
+    switch (type) {
+      case 'external':
+        return <Globe className="w-3 h-3" />
+      case 'internal':
+        return <Hash className="w-3 h-3" />
+      case 'email':
+        return <Mail className="w-3 h-3" />
+      default:
+        return <FileText className="w-3 h-3" />
+    }
+  }
+
+  // Truncate text smartly
+  const truncateText = (text: string, maxLength: number = 25): string => {
+    if (text.length <= maxLength) return text
+    
+    // Try to break at word boundary
+    const truncated = text.substring(0, maxLength)
+    const lastSpace = truncated.lastIndexOf(' ')
+    
+    if (lastSpace > maxLength * 0.7) {
+      return truncated.substring(0, lastSpace) + '...'
+    }
+    
+    return truncated + '...'
+  }
+
+  // Extract text content from PDF for links
+  const extractLinkText = async (page: any, annotation: any): Promise<string> => {
+    try {
+      // Get text content from the page
+      const textContent = await page.getTextContent()
+      const rect = annotation.rect
+      
+      // Find text items that overlap with the link rectangle
+      const linkTexts: string[] = []
+      
+      textContent.items.forEach((item: any) => {
+        if (item.transform && item.str) {
+          // Calculate item position
+          const itemX = item.transform[4]
+          const itemY = item.transform[5]
+          
+          // Check if text item is within link bounds (with some tolerance)
+          const tolerance = 5
+          if (
+            itemX >= rect[0] - tolerance &&
+            itemX <= rect[2] + tolerance &&
+            itemY >= rect[1] - tolerance &&
+            itemY <= rect[3] + tolerance
+          ) {
+            linkTexts.push(item.str.trim())
+          }
+        }
+      })
+      
+      // Combine found texts or fallback to URL
+      const combinedText = linkTexts.join(' ').trim()
+      return combinedText || annotation.url || 'Unknown Link'
+      
+    } catch (error) {
+      console.error('Error extracting link text:', error)
+      // Fallback: use URL as text
+      return annotation.url || 'Unknown Link'
+    }
+  }
+
+  // Convert PDF to images with enhanced link extraction
   const convertPdfToImages = useCallback(async (url: string, forceReload = false) => {
     setPdfError('')
     setPdfLoaded(false)
     setLoadingProgress(0)
+    setAllLinks([])
 
     // Try to load from cache first
     if (!forceReload) {
@@ -341,12 +411,19 @@ export default function DropAccessPage() {
         setTotalPages(cachedPages.length)
         setPdfLoaded(true)
         setLoadingProgress(100)
+        
+        // Extract all links from cached pages
+        const links: PDFLink[] = []
+        cachedPages.forEach(page => {
+          links.push(...page.links)
+        })
+        setAllLinks(links)
         return
       }
     }
 
     try {
-      console.log('Converting PDF to images with links for URL:', url)
+      console.log('Converting PDF to images with enhanced link extraction for URL:', url)
 
       // Load PDF.js if not already loaded
       if (!(window as any).pdfjsLib) {
@@ -388,8 +465,9 @@ export default function DropAccessPage() {
       setTotalPages(pdf.numPages)
 
       const pages: PDFPageData[] = []
+      const allExtractedLinks: PDFLink[] = []
 
-      // Convert each page to image and extract links
+      // Convert each page to image and extract links with text
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         console.log(`Processing page ${pageNum}/${pdf.numPages}`)
         
@@ -421,27 +499,36 @@ export default function DropAccessPage() {
           // Convert canvas to image
           const imageDataUrl = canvas.toDataURL('image/png', 0.95)
 
-          // Extract link annotations
+          // Extract link annotations with text
           const annotations = await page.getAnnotations()
           const links: PDFLink[] = []
 
-          annotations.forEach((annotation: any) => {
+          for (const annotation of annotations) {
             if (annotation.subtype === 'Link' && annotation.url) {
-              // Transform annotation rect to viewport coordinates
-              const rect = annotation.rect
-              
-              // Convert PDF coordinates to viewport coordinates
-              const viewportRect = viewport.convertToViewportRectangle(rect)
-              
-              links.push({
-                url: annotation.url,
-                rect: viewportRect as [number, number, number, number],
-                pageIndex: pageNum - 1
-              })
-              
-              console.log(`Found link on page ${pageNum}: ${annotation.url}`)
+              try {
+                // Extract the actual link text
+                const linkText = await extractLinkText(page, annotation)
+                
+                const rect = annotation.rect
+                const viewportRect = viewport.convertToViewportRectangle(rect)
+                
+                const link: PDFLink = {
+                  url: annotation.url,
+                  text: linkText,
+                  rect: viewportRect as [number, number, number, number],
+                  pageIndex: pageNum - 1,
+                  type: getLinkType(annotation.url)
+                }
+                
+                links.push(link)
+                allExtractedLinks.push(link)
+                
+                console.log(`Found link on page ${pageNum}: "${linkText}" -> ${annotation.url}`)
+              } catch (linkError) {
+                console.error(`Error processing link on page ${pageNum}:`, linkError)
+              }
             }
-          })
+          }
 
           pages.push({
             imageUrl: imageDataUrl,
@@ -470,8 +557,9 @@ export default function DropAccessPage() {
       savePdfToCache(url, pages)
 
       setPdfPages(pages)
+      setAllLinks(allExtractedLinks)
       setPdfLoaded(true)
-      console.log(`Successfully processed ${pages.length} pages with links`)
+      console.log(`Successfully processed ${pages.length} pages with ${allExtractedLinks.length} total links`)
 
     } catch (error) {
       console.error('Error converting PDF to images:', error)
@@ -481,31 +569,33 @@ export default function DropAccessPage() {
   }, [dropId])
 
   // Handle link clicks with analytics
-  const handleLinkClick = (url: string, pageIndex: number) => {
+  const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    
     try {
-      // Log link access for analytics
-      console.log(`PDF link clicked: ${url} on page ${pageIndex + 1}`)
+      console.log(`PDF link clicked: "${link.text}" -> ${link.url} (Page ${link.pageIndex + 1})`)
       
-      // Additional security: validate URL
+      // Validate URL
       try {
-        const linkUrl = new URL(url)
+        const linkUrl = new URL(link.url.startsWith('mailto:') ? link.url : `http://${link.url.replace(/^https?:\/\//, '')}`)
         const allowedProtocols = ['http:', 'https:', 'mailto:']
         
         if (!allowedProtocols.includes(linkUrl.protocol)) {
           throw new Error('Invalid protocol')
         }
       } catch (urlError) {
-        console.error('Invalid URL:', url)
+        console.error('Invalid URL:', link.url)
         toast.error('Invalid link detected')
         return
       }
       
-      // Open link in new tab/window with security
+      // Open link securely
       const newWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768')
       if (newWindow) {
-        newWindow.location.href = url
-        // Show toast notification
-        toast.success(`Link opened: Page ${pageIndex + 1}`)
+        newWindow.location.href = link.url
+        toast.success(`Opened: ${truncateText(link.text, 20)}`)
+        setShowLinksDropdown(false) // Close dropdown after click
       } else {
         toast.error('Popup blocked. Please allow popups for this site.')
       }
@@ -548,7 +638,7 @@ export default function DropAccessPage() {
     }
   }
 
-  // Enhanced session management with PDF cache
+  // Session management
   const saveVerificationSession = (email: string, accessExpiresAt?: Date, contentUrl?: string, contentType?: string, dropData?: DropData, pdfPages?: PDFPageData[]) => {
     const session: VerificationSession = {
       dropId,
@@ -559,7 +649,7 @@ export default function DropAccessPage() {
       contentUrl,
       contentType,
       dropData,
-      pdfPages // Include PDF cache in session
+      pdfPages
     }
     
     try {
@@ -600,7 +690,6 @@ export default function DropAccessPage() {
       const sessions = getStoredSessions()
       const filteredSessions = sessions.filter(s => s.dropId !== dropId)
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(filteredSessions))
-      // Also clear PDF cache
       clearPdfCache()
     } catch (error) {
       console.error('Failed to clear session:', error)
@@ -620,13 +709,19 @@ export default function DropAccessPage() {
     if (session.accessExpiresAt) {
       setPersonalExpiresAt(new Date(session.accessExpiresAt))
     }
-    // Restore PDF pages from session if available
     if (session.pdfPages && session.contentType === 'pdf') {
       setPdfPages(session.pdfPages)
       setTotalPages(session.pdfPages.length)
       setPdfLoaded(true)
       setLoadingProgress(100)
-      console.log('PDF pages restored from session cache')
+      
+      // Extract all links from cached pages
+      const links: PDFLink[] = []
+      session.pdfPages.forEach(page => {
+        links.push(...page.links)
+      })
+      setAllLinks(links)
+      console.log('PDF pages and links restored from session cache')
     }
     setEmail(session.email)
   }, [])
@@ -759,7 +854,7 @@ export default function DropAccessPage() {
     try {
       setViewMode('loading')
 
-      // Check for existing valid session first (handles reload)
+      // Check for existing valid session first
       const existingSession = getValidSession()
       if (existingSession) {
         console.log('Restoring from cache...')
@@ -839,7 +934,6 @@ export default function DropAccessPage() {
     setVerifying(true)
 
     try {
-      // Log access attempt
       await logAccess(email.toLowerCase().trim(), false)
 
       const { data: recipient, error: recipientError } = await supabase
@@ -855,7 +949,6 @@ export default function DropAccessPage() {
         return
       }
 
-      // Log successful verification
       await logAccess(email.toLowerCase().trim(), true)
 
       const verifiedAt = new Date()
@@ -882,7 +975,6 @@ export default function DropAccessPage() {
 
       setPersonalExpiresAt(personalExpiry)
 
-      // Update recipient verification
       if (dropData?.default_time_limit_hours && !recipient.verified_at) {
         await supabase
           .from('drop_recipients')
@@ -901,7 +993,6 @@ export default function DropAccessPage() {
           .eq('id', recipient.id)
       }
 
-      // Update access count
       await supabase
         .from('drop_recipients')
         .update({
@@ -910,10 +1001,8 @@ export default function DropAccessPage() {
         })
         .eq('id', recipient.id)
 
-      // Load content
       await loadContent()
 
-      // Save session for reload recovery (will include PDF cache once loaded)
       saveVerificationSession(
         email.toLowerCase().trim(), 
         sessionExpiry, 
@@ -1045,7 +1134,8 @@ export default function DropAccessPage() {
     setPdfError('')
     setPdfPages([])
     setTotalPages(0)
-    setHoveredLink(null)
+    setAllLinks([])
+    setShowLinksDropdown(false)
   }
 
   const renderContent = () => {
@@ -1057,6 +1147,8 @@ export default function DropAccessPage() {
       case 'pdf':
         return (
           <div className={baseClasses}>
+            
+            {/* PDF Content */}
             <div className="relative w-full h-full overflow-auto bg-gray-400 p-4">
               {pdfError ? (
                 <div className="flex items-center justify-center h-full">
@@ -1079,7 +1171,7 @@ export default function DropAccessPage() {
                   <div className="text-center bg-white p-8 rounded-lg shadow-lg">
                     <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
                     <p className="text-gray-600">
-                      {loadingProgress === 0 ? 'Checking cache...' : 'Converting PDF with interactive links...'}
+                      {loadingProgress === 0 ? 'Checking cache...' : 'Converting PDF with link extraction...'}
                     </p>
                     {loadingProgress > 0 && (
                       <>
@@ -1096,7 +1188,7 @@ export default function DropAccessPage() {
                 </div>
               ) : (
                 <div className="max-w-4xl mx-auto min-h-full relative">
-                  {/* All pages with interactive links */}
+                  {/* All pages - no interactive elements on PDF surface */}
                   <div className="space-y-6">
                     {pdfPages.map((pageData, index) => (
                       <div key={index} className="pdf-page-container">
@@ -1108,42 +1200,8 @@ export default function DropAccessPage() {
                           onDragStart={(e) => e.preventDefault()}
                         />
                         
-                        {/* Interactive link hotspots */}
-                        {pageData.links.map((link, linkIndex) => {
-                          const [x1, y1, x2, y2] = link.rect
-                          const linkId = `${index}-${linkIndex}`
-                          
-                          return (
-                            <div
-                              key={linkIndex}
-                              className="pdf-link-hotspot"
-                              style={{
-                                left: `${(x1 / pageData.width) * 100}%`,
-                                top: `${((pageData.height - y2) / pageData.height) * 100}%`,
-                                width: `${((x2 - x1) / pageData.width) * 100}%`,
-                                height: `${((y2 - y1) / pageData.height) * 100}%`,
-                              }}
-                              onClick={(e) => {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                handleLinkClick(link.url, index)
-                              }}
-                              onMouseEnter={() => setHoveredLink(linkId)}
-                              onMouseLeave={() => setHoveredLink(null)}
-                              title={`Open: ${link.url}`}
-                            >
-                              {hoveredLink === linkId && (
-                                <div className="pdf-link-tooltip">
-                                  <ExternalLink className="w-3 h-3 inline mr-1" />
-                                  {link.url.length > 50 ? `${link.url.substring(0, 50)}...` : link.url}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                        
-                        {/* Page number and link count overlay */}
-                        <div className="absolute top-4 left-4 bg-black/70 text-white px-2 py-1 rounded text-sm">
+                        {/* Page number overlay */}
+                        <div className="absolute top-4 left-4 bg-black/70 text-white px-2 py-1 rounded text-sm pointer-events-none">
                           Page {index + 1} of {totalPages}
                           {pageData.links.length > 0 && (
                             <span className="ml-2 text-blue-300">
@@ -1155,29 +1213,154 @@ export default function DropAccessPage() {
                     ))}
                   </div>
                   
-                  {/* Page counter and link summary overlay */}
-                  <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-black/80 text-white px-4 py-2 rounded-full">
-                    <span className="text-sm font-medium">
-                      {totalPages} pages • {pdfPages.reduce((total, page) => total + page.links.length, 0)} interactive links
-                    </span>
-                  </div>
+                  {/* Watermark */}
+<div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-xs pointer-events-none">
+  🔒 This content is securely protected by DropAccess
+</div>
                 </div>
               )}
             </div>
           </div>
         )
 
+      case 'youtube':
+        return (
+          <div className={baseClasses}>
+            <iframe
+              src={contentUrl}
+              className="w-full h-full border-0"
+              allowFullScreen
+              title={dropData?.name}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              onContextMenu={(e) => e.preventDefault()}
+            />
+          </div>
+        )
+
+      case 'google-docs':
+      case 'google-slides':
+      case 'google-sheets':
+        return (
+          <div className={baseClasses}>
+            <div className="relative w-full h-full">
+              <iframe
+                src={contentUrl}
+                className="w-full h-full border-0"
+                allowFullScreen
+                title={dropData?.name}
+              />
+              <div 
+                className="absolute inset-0 z-50 bg-transparent"
+                onContextMenu={(e) => e.preventDefault()}
+                style={{ pointerEvents: 'auto' }}
+              />
+            </div>
+          </div>
+        )
+
+      case 'website':
+        return (
+          <div className={baseClasses}>
+            <div className="relative w-full h-full">
+              <iframe
+                src={contentUrl}
+                className="w-full h-full border-0"
+                title={dropData?.name}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+              />
+              <div 
+                className="absolute inset-0 z-50 bg-transparent"
+                onContextMenu={(e) => e.preventDefault()}
+                style={{ pointerEvents: 'auto' }}
+              />
+            </div>
+          </div>
+        )
+
+      case 'image':
+        return (
+          <div className={baseClasses}>
+            <div className="w-full h-full overflow-auto p-4 flex items-center justify-center">
+              <img
+                src={contentUrl}
+                alt={dropData?.name || ''}
+                className="max-w-full max-h-full object-contain bg-white shadow-lg"
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                onDragStart={(e) => e.preventDefault()}
+                style={{ pointerEvents: 'none' }}
+              />
+            </div>
+          </div>
+        )
+
+      case 'video':
+        return (
+          <div className={baseClasses}>
+            <div className="w-full h-full flex items-center justify-center p-4">
+              <video
+                src={contentUrl}
+                controls
+                className="max-w-full max-h-full"
+                controlsList="nodownload nofullscreen noremoteplayback"
+                disablePictureInPicture
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                Your browser does not support the video tag.
+              </video>
+            </div>
+          </div>
+        )
+
+      case 'audio':
+        return (
+          <div className={`${baseClasses} flex items-center justify-center`}>
+            <div className="text-center bg-white p-8 rounded-lg shadow-lg">
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Volume2 className="w-8 h-8 text-primary" />
+              </div>
+              <h3 className="text-lg font-medium mb-4 text-gray-900">{dropData?.name}</h3>
+              <audio
+                src={contentUrl}
+                controls
+                className="w-full max-w-md mx-auto"
+                controlsList="nodownload"
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                Your browser does not support the audio tag.
+              </audio>
+            </div>
+          </div>
+        )
+
+      case 'text':
+        return (
+          <div className={baseClasses}>
+            <div className="relative w-full h-full overflow-auto">
+              <iframe
+                src={contentUrl}
+                className="w-full h-full border-0"
+                title={dropData?.name}
+              />
+              <div 
+                className="absolute inset-0 z-50 bg-transparent"
+                onContextMenu={(e) => e.preventDefault()}
+                style={{ pointerEvents: 'auto' }}
+              />
+            </div>
+          </div>
+        )
+
       default:
-        // Other content types remain the same...
         return (
           <div className={`${baseClasses} flex items-center justify-center`}>
             <div className="text-center max-w-md mx-auto p-8 bg-white rounded-lg shadow-lg">
               <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
                 <AlertCircle className="w-8 h-8 text-red-600" />
               </div>
-              <h3 className="text-lg font-medium mb-2 text-gray-900">Content Type: {contentType}</h3>
+              <h3 className="text-lg font-medium mb-2 text-gray-900">File Not Viewable</h3>
               <p className="text-gray-600 mb-4">
-                Other content types rendered here...
+                This file type cannot be previewed for security reasons
               </p>
             </div>
           </div>
@@ -1185,7 +1368,6 @@ export default function DropAccessPage() {
     }
   }
 
-  // Rest of the component remains the same (verification form, error handling, etc.)
   if (viewMode === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -1324,6 +1506,7 @@ export default function DropAccessPage() {
 
   return (
     <div className="h-screen bg-black relative">
+      
       {/* Header overlay */}
       <div 
         className={`absolute top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm text-white transition-all duration-300 ${
@@ -1353,27 +1536,78 @@ export default function DropAccessPage() {
                   <CheckCircle className="w-3 h-3 mr-1" />
                   {email}
                 </span>
-                <span className="flex items-center">
-                  {getAccessType() === 'creation' ? (
-                    <>
-                      <CalendarDays className="w-3 h-3 mr-1" />
-                      Shared Deadline
-                    </>
-                  ) : (
-                    <>
-                      <Timer className="w-3 h-3 mr-1" />
-                      Personal Timer
-                    </>
-                  )}
-                </span>
-                {contentType === 'pdf' && pdfLoaded && (
+                
+                {contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
                   <span className="flex items-center">
                     <Link2 className="w-3 h-3 mr-1" />
                     <span className="text-blue-300">
-                      {pdfPages.reduce((total, page) => total + page.links.length, 0)} links
+                      {allLinks.length} links
                     </span>
                   </span>
                 )}
+                {pdfLoaded && allLinks.length > 0 && (
+              <div className="absolute top-4 mt-30 right-4 z-50">
+                <div className="relative">
+                  {/* Trigger Button */}
+                  <button
+                    className="pdf-links-trigger bg-white/95 backdrop-blur-sm border  border-gray-200 rounded-lg px-4 py-2 shadow-lg hover:bg-white transition-all duration-200 flex items-center gap-2"
+                    onClick={() => setShowLinksDropdown(!showLinksDropdown)}
+                  >
+                    <Link2 className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm font-medium text-gray-700">
+                      {allLinks.length} Link{allLinks.length !== 1 ? 's' : ''}
+                    </span>
+                    {showLinksDropdown ? (
+                      <ChevronUp className="w-3 h-3 text-gray-500" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3 text-gray-500" />
+                    )}
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showLinksDropdown && (
+                    <div className="pdf-links-dropdown absolute top-full right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto">
+                      <div className="p-3 border-b border-gray-100 bg-gray-50">
+                        <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                          <ExternalLink className="w-4 h-4" />
+                          PDF Links ({allLinks.length})
+                        </h3>
+                      </div>
+                      
+                      <div className="py-2">
+                        {allLinks.map((link, index) => (
+                          <button
+                            key={index}
+                            className="pdf-link-item w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-50 last:border-b-0"
+                            onClick={(e) => handleLinkClick(link, e)}
+                            title={`${link.text} - ${link.url}`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="flex-shrink-0 mt-0.5 text-gray-400">
+                                {getLinkIcon(link.type)}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">
+                                  {truncateText(link.text, 30)}
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-3">
+                                  <span>Pg {link.pageIndex + 1}</span>
+                                  <span>•</span>
+                                  <span className="truncate" style={{ maxWidth: '180px' }}>
+                                    {link.url}
+                                  </span>
+                                </div>
+                              </div>
+                              <ExternalLink className="w-3 h-3 text-gray-400 flex-shrink-0 mt-1" />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
               </div>
             </div>
           </div>
