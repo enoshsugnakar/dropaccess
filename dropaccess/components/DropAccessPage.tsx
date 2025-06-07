@@ -26,7 +26,9 @@ import {
   PlayCircle,
   Monitor,
   ArrowLeft,
-  Timer
+  Timer,
+  CalendarDays,
+  UserCheck
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -37,7 +39,9 @@ interface DropData {
   drop_type: 'file' | 'url'
   file_path?: string
   masked_url?: string
-  expires_at: string
+  expires_at?: string
+  default_time_limit_hours?: number
+  global_expires_at?: string
   one_time_access: boolean
   is_active: boolean
   allow_download?: boolean
@@ -48,9 +52,10 @@ interface VerificationSession {
   email: string
   verifiedAt: number
   expiresAt: number
+  accessExpiresAt?: number
 }
 
-type ViewMode = 'verification' | 'content' | 'accessed'
+type ViewMode = 'verification' | 'content' | 'accessed' | 'direct-access'
 
 const SESSION_DURATION = 30 * 60 * 1000 // 30 minutes
 const SESSION_STORAGE_KEY = 'dropaccess_verification'
@@ -72,14 +77,24 @@ export default function DropAccessPage() {
   const [timeRemaining, setTimeRemaining] = useState<string>('')
   const [showHeader, setShowHeader] = useState(true)
   const [mouseInContent, setMouseInContent] = useState(false)
+  const [personalExpiresAt, setPersonalExpiresAt] = useState<Date | null>(null)
+
+  // Determine access type
+  const getAccessType = () => {
+    if (!dropData) return 'unknown'
+    if (dropData.expires_at) return 'creation'
+    if (dropData.default_time_limit_hours && !dropData.expires_at) return 'verification'
+    return 'unknown'
+  }
 
   // Session management functions
-  const saveVerificationSession = (email: string) => {
+  const saveVerificationSession = (email: string, accessExpiresAt?: Date) => {
     const session: VerificationSession = {
       dropId,
       email,
       verifiedAt: Date.now(),
-      expiresAt: Date.now() + SESSION_DURATION
+      expiresAt: Date.now() + SESSION_DURATION,
+      accessExpiresAt: accessExpiresAt?.getTime()
     }
     
     try {
@@ -116,7 +131,8 @@ export default function DropAccessPage() {
       const sessions = getStoredSessions()
       const session = sessions.find(s => 
         s.dropId === dropId && 
-        s.expiresAt > Date.now()
+        s.expiresAt > Date.now() &&
+        (!s.accessExpiresAt || s.accessExpiresAt > Date.now())
       )
       return session || null
     } catch (error) {
@@ -164,13 +180,45 @@ export default function DropAccessPage() {
 
     const updateTimer = () => {
       const now = new Date()
-      const expiresAt = new Date(dropData.expires_at)
-      const diff = expiresAt.getTime() - now.getTime()
+      let targetTime: Date | null = null
+      let label = ''
+
+      if (dropData.expires_at) {
+        // "After Creation" mode
+        targetTime = new Date(dropData.expires_at)
+        label = 'Drop expires in'
+      } else if (personalExpiresAt) {
+        // "After Verification" mode with personal expiry
+        targetTime = personalExpiresAt
+        label = 'Your access expires in'
+      } else if (dropData.default_time_limit_hours) {
+        // "After Verification" mode but not yet verified
+        const hours = dropData.default_time_limit_hours
+        if (hours < 24) {
+          setTimeRemaining(`${hours} hour${hours !== 1 ? 's' : ''} after verification`)
+        } else {
+          const days = Math.floor(hours / 24)
+          const remainingHours = hours % 24
+          if (remainingHours === 0) {
+            setTimeRemaining(`${days} day${days !== 1 ? 's' : ''} after verification`)
+          } else {
+            setTimeRemaining(`${days}d ${remainingHours}h after verification`)
+          }
+        }
+        return
+      }
+
+      if (!targetTime) {
+        setTimeRemaining('No expiry set')
+        return
+      }
+
+      const diff = targetTime.getTime() - now.getTime()
       
       if (diff <= 0) {
         setTimeRemaining('Expired')
         setError('This drop has expired')
-        clearSession() // Clear session if drop expired
+        clearSession()
         return
       }
       
@@ -179,46 +227,71 @@ export default function DropAccessPage() {
       const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
       const seconds = Math.floor((diff % (1000 * 60)) / 1000)
       
+      let timeString = ''
       if (days > 0) {
-        setTimeRemaining(`${days}d ${hours}h ${minutes}m ${seconds}s`)
+        timeString = `${days}d ${hours}h ${minutes}m ${seconds}s`
       } else if (hours > 0) {
-        setTimeRemaining(`${hours}h ${minutes}m ${seconds}s`)
+        timeString = `${hours}h ${minutes}m ${seconds}s`
       } else if (minutes > 0) {
-        setTimeRemaining(`${minutes}m ${seconds}s`)
+        timeString = `${minutes}m ${seconds}s`
       } else {
-        setTimeRemaining(`${seconds}s`)
+        timeString = `${seconds}s`
       }
+      
+      setTimeRemaining(timeString)
     }
 
     updateTimer()
     const interval = setInterval(updateTimer, 1000)
 
     return () => clearInterval(interval)
-  }, [dropData])
+  }, [dropData, personalExpiresAt])
 
   const checkDropAvailability = async () => {
+    console.log('=== DEBUG START ===')
+  console.log('Current dropId from URL:', dropId)
+  console.log('dropId type:', typeof dropId)
+  console.log('dropId length:', dropId?.length)
+    
     try {
-      const { data, error } = await supabase
+      console.log('Making Supabase query with dropId:', dropId)
+      // First, let's check if any rows exist at all
+      const { data: allData, error: queryError } = await supabase
         .from('drops')
         .select('*')
         .eq('id', dropId)
-        .single()
+        
 
-      if (error || !data) {
-        setError('Drop not found')
+      console.log('Drop query result:', { data: allData, error: queryError, dropId })
+
+      if (queryError) {
+        console.error('Database error:', queryError)
+        setError(`Database error: ${queryError.message}`)
         setLoading(false)
         return
       }
 
-      const now = new Date()
-      const expiresAt = new Date(data.expires_at)
-      if (expiresAt < now) {
-        setError('This drop has expired')
-        clearSession()
+      // Check if we have no rows
+      if (!allData || allData.length === 0) {
+        console.error('No drop found with ID:', dropId)
+        setError('Drop not found - this link may be invalid or expired')
         setLoading(false)
         return
       }
 
+      // Check if we have multiple rows (shouldn't happen with UUIDs)
+      if (allData.length > 1) {
+        console.error('Multiple drops found with same ID:', dropId, allData)
+        setError('Invalid drop configuration - multiple entries found')
+        setLoading(false)
+        return
+      }
+
+      // We have exactly one row
+      const data = allData[0]
+      console.log('Drop data found:', data)
+
+      // Check if drop is active
       if (!data.is_active) {
         setError('This drop is no longer active')
         clearSession()
@@ -226,6 +299,32 @@ export default function DropAccessPage() {
         return
       }
 
+      // Determine access type based on what fields are set
+      let accessType = 'unknown'
+      if (data.expires_at) {
+        accessType = 'creation' // Has fixed expiry date
+      } else if (data.default_time_limit_hours && !data.expires_at) {
+        accessType = 'verification' // Has time limit but no fixed expiry
+      }
+      
+      console.log('Access type determined:', accessType, {
+        expires_at: data.expires_at,
+        default_time_limit_hours: data.default_time_limit_hours
+      })
+
+      // Check if drop has expired (for "After Creation" mode)
+      if (accessType === 'creation' && data.expires_at) {
+        const now = new Date()
+        const expiresAt = new Date(data.expires_at)
+        if (expiresAt < now) {
+          setError('This drop has expired')
+          clearSession()
+          setLoading(false)
+          return
+        }
+      }
+
+      // Check one-time access
       if (data.one_time_access) {
         const { data: accessLogs, error: logsError } = await supabase
           .from('drop_access_logs')
@@ -242,18 +341,36 @@ export default function DropAccessPage() {
       }
 
       setDropData(data)
-
-      // Check for existing valid session
-      const existingSession = getValidSession()
-      if (existingSession) {
-        // Auto-verify with existing session
-        setEmail(existingSession.email)
-        setViewMode('content')
+      
+      if (accessType === 'creation') {
+        // "After Creation" mode - direct access, no verification needed
+        setViewMode('direct-access')
         setLoading(false)
-        await prepareContent(existingSession.email)
+        await prepareContent('direct-access')
+        return
+      } else if (accessType === 'verification') {
+        // "After Verification" mode - check for existing session
+        const existingSession = getValidSession()
+        if (existingSession) {
+          // Auto-verify with existing session
+          setEmail(existingSession.email)
+          if (existingSession.accessExpiresAt) {
+            setPersonalExpiresAt(new Date(existingSession.accessExpiresAt))
+          }
+          setViewMode('content')
+          setLoading(false)
+          await prepareContent(existingSession.email)
+          return
+        }
+        
+        // Need verification
+        setViewMode('verification')
+        setLoading(false)
         return
       }
 
+      // Unknown access type
+      setError(`Invalid drop configuration - access type: ${accessType}`)
       setLoading(false)
     } catch (err: any) {
       console.error('Error checking drop:', err)
@@ -287,8 +404,26 @@ export default function DropAccessPage() {
         return
       }
 
+      // Update recipient verification status and calculate personal expiry
+      const verifiedAt = new Date()
+      let personalExpiry: Date | null = null
+      
+      if (dropData?.default_time_limit_hours) {
+        personalExpiry = new Date(verifiedAt.getTime() + (dropData.default_time_limit_hours * 60 * 60 * 1000))
+        setPersonalExpiresAt(personalExpiry)
+      }
+
+      // Update recipient in database
+      await supabase
+        .from('drop_recipients')
+        .update({
+          verified_at: verifiedAt.toISOString(),
+          personal_expires_at: personalExpiry?.toISOString() || null
+        })
+        .eq('id', recipient.id)
+
       // Save verification session
-      saveVerificationSession(email.toLowerCase().trim())
+      saveVerificationSession(email.toLowerCase().trim(), personalExpiry || undefined)
       
       setViewMode('content')
       toast.success('Email verified successfully')
@@ -304,35 +439,45 @@ export default function DropAccessPage() {
   const prepareContent = async (verifiedEmail?: string) => {
     if (!dropData) return
 
-    const emailToUse = verifiedEmail || email
+    const emailToUse = verifiedEmail === 'direct-access' ? 'direct-access' : (verifiedEmail || email)
 
     setAccessing(true)
     
     try {
-      // Log the access
-      await supabase.from('drop_access_logs').insert({
-        drop_id: dropId,
-        recipient_email: emailToUse.toLowerCase().trim(),
-        ip_address: null,
-        user_agent: navigator.userAgent
-      })
+      // Log the access (only if not direct access)
+      if (emailToUse !== 'direct-access') {
+        await supabase.from('drop_access_logs').insert({
+          drop_id: dropId,
+          recipient_email: emailToUse.toLowerCase().trim(),
+          ip_address: null,
+          user_agent: navigator.userAgent
+        })
 
-      // Update recipient access info
-      const { data: recipient } = await supabase
-        .from('drop_recipients')
-        .select('*')
-        .eq('drop_id', dropId)
-        .eq('email', emailToUse.toLowerCase().trim())
-        .single()
-
-      if (recipient) {
-        await supabase
+        // Update recipient access info
+        const { data: recipient } = await supabase
           .from('drop_recipients')
-          .update({
-            accessed_at: recipient.accessed_at || new Date().toISOString(),
-            access_count: (recipient.access_count || 0) + 1
-          })
-          .eq('id', recipient.id)
+          .select('*')
+          .eq('drop_id', dropId)
+          .eq('email', emailToUse.toLowerCase().trim())
+          .single()
+
+        if (recipient) {
+          await supabase
+            .from('drop_recipients')
+            .update({
+              accessed_at: recipient.accessed_at || new Date().toISOString(),
+              access_count: (recipient.access_count || 0) + 1
+            })
+            .eq('id', recipient.id)
+        }
+      } else {
+        // For direct access, still log it but without recipient email
+        await supabase.from('drop_access_logs').insert({
+          drop_id: dropId,
+          recipient_email: 'direct-access',
+          ip_address: null,
+          user_agent: navigator.userAgent
+        })
       }
 
       if (dropData.drop_type === 'url' && dropData.masked_url) {
@@ -350,10 +495,17 @@ export default function DropAccessPage() {
 
   const handleLogout = () => {
     clearSession()
-    setViewMode('verification')
-    setEmail('')
-    setContentUrl(null)
-    setContentType('')
+    if (getAccessType() === 'creation') {
+      // For direct access, redirect to homepage
+      router.push('/')
+    } else {
+      // For verification mode, go back to verification
+      setViewMode('verification')
+      setEmail('')
+      setContentUrl(null)
+      setContentType('')
+      setPersonalExpiresAt(null)
+    }
     toast.success('Logged out successfully')
   }
 
@@ -667,8 +819,11 @@ export default function DropAccessPage() {
     )
   }
 
-  // Verification state
+  // Verification state - only for "After Verification" drops
   if (viewMode === 'verification') {
+    const accessType = getAccessType()
+    const AccessIcon = accessType === 'verification' ? Timer : CalendarDays
+
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
         <div className="bg-white dark:bg-gray-800 rounded-xl p-8 border border-gray-200 dark:border-gray-700 max-w-md w-full shadow-lg">
@@ -699,11 +854,16 @@ export default function DropAccessPage() {
               {dropData.description && (
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{dropData.description}</p>
               )}
-              <div className="flex items-center gap-1 text-sm">
-                <Timer className="w-3 h-3 text-orange-600" />
-                <span className="text-orange-600 font-medium">
-                  Expires in: {timeRemaining}
-                </span>
+              <div className="flex items-center gap-2 text-sm">
+                <div className="flex items-center gap-1">
+                  <AccessIcon className="w-3 h-3 text-blue-600" />
+                  <span className="text-blue-600 font-medium">After Verification</span>
+                </div>
+                <span className="text-gray-400">•</span>
+                <div className="flex items-center gap-1">
+                  <Timer className="w-3 h-3 text-orange-600" />
+                  <span className="text-orange-600 font-medium">{timeRemaining}</span>
+                </div>
               </div>
             </div>
           )}
@@ -746,8 +906,8 @@ export default function DropAccessPage() {
                 </>
               ) : (
                 <>
-                  <Shield className="w-4 h-4 mr-2" />
-                  Verify & Access
+                  <UserCheck className="w-4 h-4 mr-2" />
+                  Verify & Start Timer
                 </>
               )}
             </Button>
@@ -759,7 +919,7 @@ export default function DropAccessPage() {
               🔒 This content is securely protected by DropAccess
             </p>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Your verification will be remembered for 30 minutes
+              Your personal timer starts after verification
             </p>
           </div>
         </div>
@@ -797,10 +957,18 @@ export default function DropAccessPage() {
                   <Clock className="w-3 h-3 mr-1 text-red-400" />
                   <span className="text-red-300 font-medium">{timeRemaining}</span>
                 </span>
-                <span className="flex items-center">
-                  <CheckCircle className="w-3 h-3 mr-1" />
-                  {email}
-                </span>
+                {getAccessType() === 'verification' && email && (
+                  <span className="flex items-center">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    {email}
+                  </span>
+                )}
+                {getAccessType() === 'creation' && (
+                  <span className="flex items-center">
+                    <CalendarDays className="w-3 h-3 mr-1" />
+                    Direct Access
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -822,7 +990,7 @@ export default function DropAccessPage() {
               onClick={handleLogout}
               className="text-white hover:text-gray-300 hover:bg-white/10"
             >
-              Logout
+              {getAccessType() === 'creation' ? 'Close' : 'Logout'}
             </Button>
           </div>
         </div>

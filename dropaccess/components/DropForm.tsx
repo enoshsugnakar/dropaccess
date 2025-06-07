@@ -13,12 +13,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useState, useRef } from "react";
-import { FileUp, Link2, Shield, Users, Clock, Info, Loader2, Upload, X, CheckCircle } from "lucide-react";
+import { FileUp, Link2, Shield, Users, Clock, Info, Loader2, Upload, X, CheckCircle, Timer, CalendarDays } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { Navbar } from "@/components/Navbar";
+import { format, addHours } from "date-fns";
 
 interface FormData {
   name: string;
@@ -26,9 +27,10 @@ interface FormData {
   dropType: "file" | "url";
   maskedUrl: string;
   recipients: string;
-  expiresIn: "1h" | "24h" | "7d" | "30d" | "custom";
-  customExpiry: string;
-  oneTimeAccess: boolean;
+  timerMode: "verification" | "creation";
+  defaultTimeLimitHours: number | null;
+  verificationDeadline: Date | undefined;
+  creationExpiry: string;
   sendNotifications: boolean;
 }
 
@@ -40,6 +42,7 @@ export function DropForm() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [customDateTime, setCustomDateTime] = useState<string>("");
 
   const [formData, setFormData] = useState<FormData>({
     name: "",
@@ -47,9 +50,10 @@ export function DropForm() {
     dropType: "url",
     maskedUrl: "",
     recipients: "",
-    expiresIn: "24h",
-    customExpiry: "",
-    oneTimeAccess: false,
+    timerMode: "verification",
+    defaultTimeLimitHours: 24,
+    verificationDeadline: undefined,
+    creationExpiry: "",
     sendNotifications: true,
   });
 
@@ -106,15 +110,33 @@ export function DropForm() {
       }
     }
 
-    // Validate custom expiry
-    if (formData.expiresIn === "custom") {
-      if (!formData.customExpiry) {
-        newErrors.customExpiry = "Please select a custom expiry date and time";
+    // Validate timer settings based on mode
+    if (formData.timerMode === "verification") {
+      // Verification mode - only validate preset hours
+      if (formData.defaultTimeLimitHours === null || formData.defaultTimeLimitHours < 1) {
+        newErrors.defaultTimeLimitHours = "Time limit must be at least 1 hour for verification mode";
+      } else if (formData.defaultTimeLimitHours > 8760) {
+        newErrors.defaultTimeLimitHours = "Time limit cannot exceed 8760 hours (1 year)";
+      }
+    } else {
+      // Creation mode - validate based on preset or custom
+      if (formData.defaultTimeLimitHours === null) {
+        // Custom mode
+        if (!customDateTime) {
+          newErrors.creationExpiry = "Please select a custom date and time";
+        } else {
+          const expiryDate = new Date(customDateTime);
+          const now = new Date();
+          if (expiryDate <= now) {
+            newErrors.creationExpiry = "Expiry date must be in the future";
+          }
+        }
       } else {
-        const expiryDate = new Date(formData.customExpiry);
-        const now = new Date();
-        if (expiryDate <= now) {
-          newErrors.customExpiry = "Expiry date must be in the future";
+        // Preset mode
+        if (formData.defaultTimeLimitHours < 1) {
+          newErrors.defaultTimeLimitHours = "Time limit must be at least 1 hour";
+        } else if (formData.defaultTimeLimitHours > 8760) {
+          newErrors.defaultTimeLimitHours = "Time limit cannot exceed 8760 hours (1 year)";
         }
       }
     }
@@ -141,7 +163,6 @@ export function DropForm() {
         .single();
 
       if (checkError && checkError.code !== "PGRST116") {
-        // PGRST116 is "not found" error, other errors are real problems
         console.error("Error checking user existence:", checkError);
         throw checkError;
       }
@@ -177,26 +198,7 @@ export function DropForm() {
     }
   };
 
-  const calculateExpiryDate = (expiresIn: string, customExpiry?: string) => {
-    if (expiresIn === "custom" && customExpiry) {
-      return new Date(customExpiry).toISOString();
-    }
-    const now = new Date();
-    switch (expiresIn) {
-      case "1h":
-        return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-      case "24h":
-        return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-      case "7d":
-        return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      case "30d":
-        return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
-      default:
-        return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    }
-  };
-
-  // Fixed file upload function - matches storage policy structure
+  // Fixed file upload function
   const handleFileUpload = async (file: File, dropId: string): Promise<string> => {
     if (!user) throw new Error("User not authenticated");
     
@@ -204,9 +206,6 @@ export function DropForm() {
     const timestamp = Date.now();
     const randomPortion = Math.random().toString(36).substring(2, 10);
     const fileName = `${timestamp}_${randomPortion}.${fileExt}`;
-    
-    // Path structure: userId/dropId/filename
-    // This matches the storage policy: auth.uid()::text = (storage.foldername(name))[1]
     const filePath = `${user.id}/${dropId}/${fileName}`;
     
     console.log("Uploading file to path:", filePath);
@@ -225,6 +224,19 @@ export function DropForm() {
     
     console.log("File uploaded successfully:", uploadData);
     return filePath;
+  };
+
+  const getExpiryDate = () => {
+    if (formData.timerMode === "creation" && formData.defaultTimeLimitHours === null) {
+      // Creation mode with custom date
+      return customDateTime ? new Date(customDateTime) : null;
+    } else if (formData.timerMode === "creation" && formData.defaultTimeLimitHours !== null) {
+      // Creation mode with preset duration
+      const now = new Date();
+      return addHours(now, formData.defaultTimeLimitHours);
+    }
+    // Verification mode doesn't use expires_at
+    return null;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -251,18 +263,31 @@ export function DropForm() {
         throw new Error("Failed to create or verify user account");
       }
 
-      // Create the drop first - REMOVED allow_download field
-      const dropPayload = {
+      const expiryDate = getExpiryDate();
+
+      // Create the drop with proper timer system
+      const dropPayload: any = {
         owner_id: user.id,
         name: formData.name.trim(),
         drop_type: formData.dropType,
         masked_url: formData.dropType === "url" ? formData.maskedUrl.trim() : null,
-        expires_at: calculateExpiryDate(formData.expiresIn, formData.customExpiry),
         description: formData.description.trim() || null,
-        one_time_access: formData.oneTimeAccess,
         is_active: true,
-        file_path: null, // Initialize as null, will update after file upload
+        file_path: null,
       };
+
+      // Add timer-related fields based on mode
+      if (formData.timerMode === "verification") {
+        // Verification mode - use default_time_limit_hours, no expires_at
+        dropPayload.default_time_limit_hours = formData.defaultTimeLimitHours;
+        dropPayload.expires_at = null;
+      } else {
+        // Creation mode - use expires_at, no default_time_limit_hours
+        if (expiryDate) {
+          dropPayload.expires_at = expiryDate.toISOString();
+        }
+        dropPayload.default_time_limit_hours = null;
+      }
 
       console.log("Creating drop with payload:", dropPayload);
 
@@ -291,7 +316,7 @@ export function DropForm() {
             .from("drops")
             .update({ file_path: filePath })
             .eq("id", insertedDrop.id)
-            .eq("owner_id", user.id); // Add owner_id check for RLS
+            .eq("owner_id", user.id);
 
           if (updateError) {
             console.error("Error updating drop with file path:", updateError);
@@ -301,7 +326,6 @@ export function DropForm() {
           console.log("Drop updated with file path successfully");
         } catch (fileError) {
           console.error("File upload failed:", fileError);
-          // Cleanup: delete the drop if file upload fails
           await supabase.from("drops").delete().eq("id", insertedDrop.id);
           throw new Error(`File upload failed: {fileError.message}`);
         }
@@ -317,6 +341,10 @@ export function DropForm() {
         const recipientsPayload = recipientEmails.map((email) => ({
           drop_id: insertedDrop.id,
           email,
+          // All recipients start unverified - verification happens at access time
+          verified_at: null,
+          personal_expires_at: null,
+          time_limit_hours: null,
         }));
 
         const { error: recipientsError } = await supabase
@@ -331,12 +359,20 @@ export function DropForm() {
         console.log("Recipients added successfully");
       }
 
-      // Send notifications if enabled
+      // Send appropriate emails
       if (formData.sendNotifications) {
-        console.log("Would send notifications to:", recipientEmails);
+        if (formData.timerMode === "verification") {
+          console.log("Would send verification emails to:", recipientEmails);
+        } else {
+          console.log("Would send direct access emails to:", recipientEmails);
+        }
       }
 
-      toast.success("Drop created successfully!");
+      const successMessage = formData.timerMode === "verification" 
+        ? "Drop created! Recipients will receive verification emails."
+        : "Drop created! Recipients can access immediately.";
+      
+      toast.success(successMessage);
       
       // Reset form
       setFormData({
@@ -345,12 +381,14 @@ export function DropForm() {
         dropType: "url",
         maskedUrl: "",
         recipients: "",
-        expiresIn: "24h",
-        customExpiry: "",
-        oneTimeAccess: false,
+        timerMode: "verification",
+        defaultTimeLimitHours: 24,
+        verificationDeadline: undefined,
+        creationExpiry: "",
         sendNotifications: true,
       });
       setUploadedFile(null);
+      setCustomDateTime("");
       setErrors({});
       
       router.push(`/drops/${insertedDrop.id}/manage`);
@@ -369,7 +407,6 @@ export function DropForm() {
     }
     
     setUploadedFile(file);
-    // Clear file error if exists
     if (errors.file) {
       setErrors(prev => ({ ...prev, file: "" }));
     }
@@ -435,17 +472,75 @@ export function DropForm() {
       .filter(email => email.length > 0).length;
   };
 
-  const getExpiryDisplay = () => {
-    if (formData.expiresIn === "custom") {
-      return formData.customExpiry ? new Date(formData.customExpiry).toLocaleDateString() : "Custom date";
+  const getTimeLimitDisplay = () => {
+    if (formData.timerMode === "creation" && formData.defaultTimeLimitHours === null) {
+      return customDateTime ? format(new Date(customDateTime), "MMM d, yyyy 'at' hh:mm aa") : "Custom - Not set";
     }
-    const map = {
-      "1h": "1 Hour",
-      "24h": "24 Hours", 
-      "7d": "7 Days",
-      "30d": "30 Days"
-    };
-    return map[formData.expiresIn];
+    
+    const hours = formData.defaultTimeLimitHours;
+    if (!hours) return "Not set";
+    
+    if (hours < 24) {
+      return `${hours} hour${hours !== 1 ? 's' : ''}`;
+    } else if (hours % 24 === 0) {
+      const days = hours / 24;
+      return `${days} day${days !== 1 ? 's' : ''}`;
+    } else {
+      const days = Math.floor(hours / 24);
+      const remainingHours = hours % 24;
+      return `${days}d ${remainingHours}h`;
+    }
+  };
+
+  const handlePresetSelect = (hours: number | null) => {
+    updateField("defaultTimeLimitHours", hours);
+    // Clear custom date when preset is selected
+    if (hours !== null) {
+      setCustomDateTime("");
+    }
+  };
+
+  const handleCustomDateChange = (dateTimeString: string) => {
+    setCustomDateTime(dateTimeString);
+    // Clear any errors when date is selected
+    if (dateTimeString && errors.creationExpiry) {
+      setErrors(prev => ({ ...prev, creationExpiry: "" }));
+    }
+  };
+
+  const handleTimerModeChange = (mode: "verification" | "creation") => {
+    updateField("timerMode", mode);
+    
+    // Reset timer settings when changing modes
+    if (mode === "verification") {
+      // Reset to preset for verification mode
+      updateField("defaultTimeLimitHours", 24);
+      setCustomDateTime("");
+    } else {
+      // Keep current settings for creation mode
+      // Custom datetime will be available if they choose it
+    }
+  };
+
+  const getAccessDescription = () => {
+    if (formData.timerMode === "verification") {
+      return "Recipients must verify their email first, then their personal timer starts counting down for the set duration.";
+    } else {
+      return "All recipients have the same deadline - timer starts immediately when drop is created.";
+    }
+  };
+
+  const isCustomMode = formData.timerMode === "creation" && formData.defaultTimeLimitHours === null;
+
+  // Get minimum datetime for the input (current time)
+  const getMinDateTime = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
   };
 
   return (
@@ -459,7 +554,7 @@ export function DropForm() {
             Create Secure Drop
           </h1>
           <p className="mt-1 text-gray-500 dark:text-gray-400">
-            Share files and links securely with time-based access control
+            Share files and links securely with flexible timer controls
           </p>
         </div>
 
@@ -520,9 +615,9 @@ export function DropForm() {
                 <RadioGroup
                   value={formData.dropType}
                   onValueChange={handleDropTypeChange}
-                  className="space-y-3"
+                  className="grid grid-cols-1 md:grid-cols-2 gap-4"
                 >
-                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer ${
+                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer h-20 ${
                     formData.dropType === "url" 
                       ? "border-primary bg-primary/5" 
                       : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
@@ -531,12 +626,11 @@ export function DropForm() {
                     <Label htmlFor="url" className="flex items-center cursor-pointer flex-1">
                       <Link2 className="w-5 h-5 mr-3 text-primary" />
                       <div>
-                        <p className="font-medium text-gray-900 dark:text-white">Masked URL</p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Hide the destination URL from recipients</p>
+                        <p className="font-medium text-gray-900 dark:text-white">URL</p>
                       </div>
                     </Label>
                   </div>
-                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer ${
+                  <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer h-20 ${
                     formData.dropType === "file" 
                       ? "border-primary bg-primary/5" 
                       : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
@@ -545,8 +639,7 @@ export function DropForm() {
                     <Label htmlFor="file" className="flex items-center cursor-pointer flex-1">
                       <FileUp className="w-5 h-5 mr-3 text-primary" />
                       <div>
-                        <p className="font-medium text-gray-900 dark:text-white">File Upload</p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Share a secure file with recipients</p>
+                        <p className="font-medium text-gray-900 dark:text-white">File</p>
                       </div>
                     </Label>
                   </div>
@@ -643,80 +736,127 @@ export function DropForm() {
 
               {/* Access Control Card */}
               <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-6">
                   <Clock className="w-5 h-5 text-primary" />
-                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Access Control</h2>
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">Access Settings</h2>
                 </div>
                 
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 block">Expiration Time</Label>
-                    <RadioGroup
-                      value={formData.expiresIn}
-                      onValueChange={(value) => updateField("expiresIn", value)}
-                      className="grid grid-cols-2 gap-3"
-                    >
-                      {[
-                        { value: "1h", label: "1 Hour" },
-                        { value: "24h", label: "24 Hours" },
-                        { value: "7d", label: "7 Days" },
-                        { value: "30d", label: "30 Days" }
-                      ].map((option) => (
-                        <div key={option.value} className={`flex items-center space-x-2 p-3 rounded-lg border-2 transition-colors cursor-pointer ${
-                          formData.expiresIn === option.value 
-                            ? "border-primary bg-primary/5" 
-                            : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        }`}>
-                          <RadioGroupItem value={option.value} id={option.value} />
-                          <Label htmlFor={option.value} className="cursor-pointer font-medium text-gray-900 dark:text-white">
-                            {option.label}
-                          </Label>
+                {/* Access Type Selection */}
+                <div className="mb-6">
+                  <Label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4 block">Access Type</Label>
+                  <RadioGroup
+                    value={formData.timerMode}
+                    onValueChange={handleTimerModeChange}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                  >
+                    <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer h-20 ${
+                      formData.timerMode === "verification" 
+                        ? "border-primary bg-primary/5" 
+                        : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                    }`}>
+                      <RadioGroupItem value="verification" id="verification" />
+                      <Label htmlFor="verification" className="flex items-center cursor-pointer flex-1">
+                        <Timer className="w-5 h-5 mr-3 text-primary" />
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-white">After Verification</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">timer starts once verified</p>
                         </div>
-                      ))}
-                      <div className={`col-span-2 flex items-center space-x-2 p-3 rounded-lg border-2 transition-colors cursor-pointer ${
-                        formData.expiresIn === "custom" 
-                          ? "border-primary bg-primary/5" 
-                          : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                      }`}>
-                        <RadioGroupItem value="custom" id="custom" />
-                        <Label htmlFor="custom" className="cursor-pointer font-medium text-gray-900 dark:text-white">
-                          Custom Date & Time
-                        </Label>
-                      </div>
-                    </RadioGroup>
+                      </Label>
+                    </div>
+                    
+                    <div className={`flex items-center space-x-3 p-4 rounded-lg border-2 transition-colors cursor-pointer h-20 ${
+                      formData.timerMode === "creation" 
+                        ? "border-primary bg-primary/5" 
+                        : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                    }`}>
+                      <RadioGroupItem value="creation" id="creation" />
+                      <Label htmlFor="creation" className="flex items-center cursor-pointer flex-1">
+                        <CalendarDays className="w-5 h-5 mr-3 text-primary" />
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-white">After Creation</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">timer starts once created</p>
+                        </div>
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
+                {/* Duration Options */}
+                <div className="mb-6">
+                  <Label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 block">
+                    Duration Options
+                  </Label>
+                  <div className={`grid gap-2 ${
+                    formData.timerMode === "verification" 
+                      ? "grid-cols-2 md:grid-cols-4" 
+                      : "grid-cols-2 md:grid-cols-5"
+                  }`}>
+                    {[
+                      { value: 1, label: "1 Hour" },
+                      { value: 3, label: "3 Hours" },
+                      { value: 12, label: "12 Hours" },
+                      { value: 24, label: "24 Hours" }
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handlePresetSelect(option.value)}
+                        className={`p-3 rounded-md border-2 transition-colors text-sm font-medium ${
+                          formData.defaultTimeLimitHours === option.value
+                            ? "border-primary bg-primary/5 text-primary" 
+                            : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                    
+                    {/* Custom option only for "After Creation" mode */}
+                    {formData.timerMode === "creation" && (
+                      <button
+                        type="button"
+                        onClick={() => handlePresetSelect(null)}
+                        className={`p-3 rounded-md border-2 transition-colors text-sm font-medium ${
+                          formData.defaultTimeLimitHours === null
+                            ? "border-primary bg-primary/5 text-primary" 
+                            : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300"
+                        }`}
+                      >
+                        Custom
+                      </button>
+                    )}
                   </div>
+                </div>
 
-                  {formData.expiresIn === "custom" && (
-                    <div>
-                      <Label htmlFor="customExpiry" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
-                        Custom Expiry <span className="text-red-500">*</span>
-                      </Label>
-                      <Input
-                        id="customExpiry"
-                        type="datetime-local"
-                        value={formData.customExpiry}
-                        onChange={(e) => updateField("customExpiry", e.target.value)}
-                        min={new Date().toISOString().slice(0, 16)}
-                        className={errors.customExpiry ? "border-red-500 focus:ring-red-500" : ""}
-                      />
-                      {errors.customExpiry && (
-                        <p className="text-sm text-red-500 mt-1">{errors.customExpiry}</p>
-                      )}
-                    </div>
-                  )}
+                {/* Custom DateTime Input - Only for Creation mode */}
+                {isCustomMode && (
+                  <div className="mb-6">
+                    <Label htmlFor="customDateTime" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+                      Select Custom Date & Time
+                    </Label>
+                    <Input
+                      id="customDateTime"
+                      type="datetime-local"
+                      value={customDateTime}
+                      onChange={(e) => handleCustomDateChange(e.target.value)}
+                      min={getMinDateTime()}
+                      className={`${errors.creationExpiry ? "border-red-500 focus:ring-red-500" : ""}`}
+                    />
+                    {errors.creationExpiry && (
+                      <p className="text-sm text-red-500 mt-2">{errors.creationExpiry}</p>
+                    )}
+                    {customDateTime && (
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                        Selected: {format(new Date(customDateTime), "MMM d, yyyy 'at' hh:mm aa")}
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                      <Label htmlFor="oneTimeAccess" className="cursor-pointer">
-                        <p className="font-medium text-gray-900 dark:text-white">One-time Access</p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Drop expires after first view</p>
-                      </Label>
-                      <Switch
-                        id="oneTimeAccess"
-                        checked={formData.oneTimeAccess}
-                        onCheckedChange={(checked) => updateField("oneTimeAccess", checked)}
-                      />
-                    </div>
+                {/* Dynamic Description */}
+                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <div className="text-sm text-gray-600 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg">
+                    <p>{getAccessDescription()}</p>
                   </div>
                 </div>
               </div>
@@ -754,8 +894,14 @@ export function DropForm() {
 
                   <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50">
                     <Label htmlFor="sendNotifications" className="cursor-pointer">
-                      <p className="font-medium text-gray-900 dark:text-white">Email Notifications</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Notify recipients when drop is created</p>
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        {formData.timerMode === "verification" ? "Send Verification Emails" : "Send Access Emails"}
+                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {formData.timerMode === "verification" 
+                          ? "Recipients must verify before accessing" 
+                          : "Recipients get direct access links"}
+                      </p>
                     </Label>
                     <Switch
                       id="sendNotifications"
@@ -781,13 +927,19 @@ export function DropForm() {
                     <span className="font-medium text-gray-900 dark:text-white">{getRecipientCount()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-500 dark:text-gray-400">Expires:</span>
-                    <span className="font-medium text-gray-900 dark:text-white">{getExpiryDisplay()}</span>
+                    <span className="text-gray-500 dark:text-gray-400">Access Type:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {formData.timerMode === "verification" ? "After Verification" : "After Creation"}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-500 dark:text-gray-400">One-time:</span>
+                    <span className="text-gray-500 dark:text-gray-400">Duration:</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{getTimeLimitDisplay()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Mode:</span>
                     <span className="font-medium text-gray-900 dark:text-white">
-                      {formData.oneTimeAccess ? "Yes" : "No"}
+                      {isCustomMode ? "Custom" : "Preset"}
                     </span>
                   </div>
                   <div className="flex justify-between">

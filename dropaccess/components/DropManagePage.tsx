@@ -28,7 +28,10 @@ import {
   Calendar,
   Activity,
   BarChart3,
-  Share2
+  Share2,
+  Timer,
+  CalendarDays,
+  UserCheck
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Navbar } from '@/components/Navbar'
@@ -40,7 +43,9 @@ interface DropDetails {
   drop_type: 'file' | 'url'
   file_path?: string
   masked_url?: string
-  expires_at: string
+  expires_at?: string
+  default_time_limit_hours?: number
+  global_expires_at?: string
   one_time_access: boolean
   is_active: boolean
   created_at: string
@@ -52,6 +57,10 @@ interface Recipient {
   email: string
   accessed_at?: string
   access_count: number
+  verified_at?: string
+  personal_expires_at?: string
+  time_limit_hours?: number
+  access_token: string
 }
 
 interface AccessLog {
@@ -177,34 +186,56 @@ function ManagePageSkeleton() {
   )
 }
 
-// Dynamic countdown hook
-function useCountdown(targetDate: string) {
+// Updated countdown hook
+function useCountdown(drop: DropDetails | null) {
   const [timeLeft, setTimeLeft] = useState('')
 
   useEffect(() => {
+    if (!drop) return
+
     const calculateTimeLeft = () => {
       const now = new Date().getTime()
-      const target = new Date(targetDate).getTime()
-      const difference = target - now
+      
+      // For "After Creation" mode - show countdown to expires_at
+      if (drop.expires_at) {
+        const targetTime = new Date(drop.expires_at).getTime()
+        const difference = targetTime - now
 
-      if (difference <= 0) {
-        setTimeLeft('Expired')
-        return
-      }
+        if (difference <= 0) {
+          setTimeLeft('Expired')
+          return
+        }
 
-      const days = Math.floor(difference / (1000 * 60 * 60 * 24))
-      const hours = Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-      const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60))
-      const seconds = Math.floor((difference % (1000 * 60)) / 1000)
+        const days = Math.floor(difference / (1000 * 60 * 60 * 24))
+        const hours = Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+        const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60))
+        const seconds = Math.floor((difference % (1000 * 60)) / 1000)
 
-      if (days > 0) {
-        setTimeLeft(`${days}d ${hours}h ${minutes}m ${seconds}s`)
-      } else if (hours > 0) {
-        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`)
-      } else if (minutes > 0) {
-        setTimeLeft(`${minutes}m ${seconds}s`)
+        if (days > 0) {
+          setTimeLeft(`${days}d ${hours}h ${minutes}m ${seconds}s`)
+        } else if (hours > 0) {
+          setTimeLeft(`${hours}h ${minutes}m ${seconds}s`)
+        } else if (minutes > 0) {
+          setTimeLeft(`${minutes}m ${seconds}s`)
+        } else {
+          setTimeLeft(`${seconds}s`)
+        }
+      } 
+      // For "After Verification" mode - show per recipient time limit
+      else if (drop.default_time_limit_hours) {
+        const hours = drop.default_time_limit_hours
+        if (hours < 24) {
+          setTimeLeft(`${hours}h per recipient`)
+        } else if (hours % 24 === 0) {
+          const days = hours / 24
+          setTimeLeft(`${days}d per recipient`)
+        } else {
+          const days = Math.floor(hours / 24)
+          const remainingHours = hours % 24
+          setTimeLeft(`${days}d ${remainingHours}h per recipient`)
+        }
       } else {
-        setTimeLeft(`${seconds}s`)
+        setTimeLeft('No time limit')
       }
     }
 
@@ -212,7 +243,7 @@ function useCountdown(targetDate: string) {
     const interval = setInterval(calculateTimeLeft, 1000)
 
     return () => clearInterval(interval)
-  }, [targetDate])
+  }, [drop])
 
   return timeLeft
 }
@@ -227,9 +258,9 @@ export default function DropManagePage() {
   const [drop, setDrop] = useState<DropDetails | null>(null)
   const [recipients, setRecipients] = useState<Recipient[]>([])
   const [refreshing, setRefreshing] = useState(false)
-  const [userIsPaid, setUserIsPaid] = useState(false) // TODO: Get from user data
+  const [userIsPaid, setUserIsPaid] = useState(false)
 
-  const timeLeft = useCountdown(drop?.expires_at || '')
+  const timeLeft = useCountdown(drop)
 
   useEffect(() => {
     if (!user) {
@@ -269,14 +300,6 @@ export default function DropManagePage() {
 
       if (recipientsError) throw recipientsError
       setRecipients(recipientsData || [])
-
-      // TODO: Fetch user subscription status
-      // const { data: userData } = await supabase
-      //   .from('users')
-      //   .select('is_paid')
-      //   .eq('id', user?.id)
-      //   .single()
-      // setUserIsPaid(userData?.is_paid || false)
 
     } catch (error) {
       console.error('Error fetching drop details:', error)
@@ -377,14 +400,94 @@ export default function DropManagePage() {
     if (!drop) return { label: 'Unknown', color: 'text-gray-600 bg-gray-100' }
 
     const now = new Date()
-    const expiresAt = new Date(drop.expires_at)
 
     if (!drop.is_active) return { label: 'Inactive', color: 'text-gray-600 bg-gray-100' }
-    if (expiresAt < now) return { label: 'Expired', color: 'text-red-600 bg-red-100' }
+
+    // Check various expiry conditions
+    if (drop.expires_at && new Date(drop.expires_at) < now) {
+      return { label: 'Expired', color: 'text-red-600 bg-red-100' }
+    }
+    
+    if (drop.global_expires_at && new Date(drop.global_expires_at) < now) {
+      return { label: 'Verification Deadline Passed', color: 'text-red-600 bg-red-100' }
+    }
+
     if (drop.one_time_access && recipients.some(r => r.accessed_at)) {
       return { label: 'Used', color: 'text-orange-600 bg-orange-100' }
     }
+
     return { label: 'Active', color: 'text-green-600 bg-green-100' }
+  }
+
+  // Updated access type detection
+  const getAccessTypeInfo = () => {
+    if (!drop) return { type: 'Unknown', icon: Clock, description: '' }
+
+    if (drop.expires_at) {
+      return {
+        type: 'After Creation',
+        icon: CalendarDays,
+        description: 'Timer started when drop was created. All recipients have the same deadline.'
+      }
+    } else if (drop.default_time_limit_hours) {
+      return {
+        type: 'After Verification',
+        icon: Timer,
+        description: 'Timer starts after each recipient verifies their email. Individual deadlines.'
+      }
+    }
+
+    // This should not happen with proper drop creation
+    return {
+      type: 'After Creation',
+      icon: CalendarDays,
+      description: 'Standard timer mode.'
+    }
+  }
+
+  // Updated duration display
+  const getDurationInfo = () => {
+    if (!drop) return { label: 'Duration', value: 'Not set' }
+
+    if (drop.expires_at) {
+      // "After Creation" mode - show expiry date
+      return {
+        label: 'Expiry Date',
+        value: new Date(drop.expires_at).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      }
+    } else if (drop.default_time_limit_hours) {
+      // "After Verification" mode - show time limit
+      const hours = drop.default_time_limit_hours
+      let timeString = ''
+      
+      if (hours < 24) {
+        timeString = `${hours} hour${hours !== 1 ? 's' : ''}`
+      } else if (hours % 24 === 0) {
+        const days = hours / 24
+        timeString = `${days} day${days !== 1 ? 's' : ''}`
+      } else {
+        const days = Math.floor(hours / 24)
+        const remainingHours = hours % 24
+        timeString = `${days}d ${remainingHours}h`
+      }
+
+      return {
+        label: 'Time Limit',
+        value: timeString
+      }
+    }
+
+    // Fallback
+    return {
+      label: 'Duration',
+      value: 'Not configured'
+    }
   }
 
   const downloadFile = async () => {
@@ -458,6 +561,8 @@ export default function DropManagePage() {
   }
 
   const status = getStatusInfo()
+  const accessType = getAccessTypeInfo()
+  const durationInfo = getDurationInfo()
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -534,19 +639,35 @@ export default function DropManagePage() {
                 </div>
                 
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Expires In</p>
-                  <p className="flex items-center gap-2 text-gray-900 dark:text-white font-mono">
-                    <Clock className="w-4 h-4" />
-                    {timeLeft}
+                  <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Access Type</p>
+                  <p className="flex items-center gap-2 text-gray-900 dark:text-white">
+                    <accessType.icon className="w-4 h-4" />
+                    {accessType.type}
                   </p>
                 </div>
                 
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Access Type</p>
+                  <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{durationInfo.label}</p>
                   <p className="flex items-center gap-2 text-gray-900 dark:text-white">
-                    <Activity className="w-4 h-4" />
-                    {drop.one_time_access ? 'One-time access' : 'Multiple access'}
+                    <Clock className="w-4 h-4" />
+                    {durationInfo.value}
                   </p>
+                </div>
+              </div>
+
+              {/* Access Type Description */}
+              <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  <strong>{accessType.type}:</strong> {accessType.description}
+                </p>
+              </div>
+
+              {/* Current Status */}
+              <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Current Status</p>
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-gray-400" />
+                  <span className="font-mono text-gray-900 dark:text-white">{timeLeft}</span>
                 </div>
               </div>
 
@@ -626,6 +747,24 @@ export default function DropManagePage() {
                         <span className="font-medium text-gray-900 dark:text-white truncate">{recipient.email}</span>
                       </div>
                       <div className="flex items-center justify-between sm:justify-end gap-3">
+                        {/* Verification Status (for verification mode only) */}
+                        {drop.default_time_limit_hours && !drop.expires_at && (
+                          <div className="flex items-center gap-2">
+                            {recipient.verified_at ? (
+                              <>
+                                <UserCheck className="w-4 h-4 text-blue-600" />
+                                <span className="text-xs font-medium text-blue-600">Verified</span>
+                              </>
+                            ) : (
+                              <>
+                                <UserCheck className="w-4 h-4 text-gray-400" />
+                                <span className="text-xs font-medium text-gray-500">Pending Verification</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Access Status */}
                         {recipient.accessed_at ? (
                           <div className="flex items-center gap-2">
                             <CheckCircle className="w-4 h-4 text-green-600" />
@@ -691,6 +830,14 @@ export default function DropManagePage() {
                   <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Recipients</span>
                   <span className="font-semibold text-gray-900 dark:text-white">{recipients.length}</span>
                 </div>
+                {drop.default_time_limit_hours && !drop.expires_at && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Verified</span>
+                    <span className="font-semibold text-blue-600">
+                      {recipients.filter(r => r.verified_at).length}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Accessed By</span>
                   <span className="font-semibold text-green-600">
@@ -704,8 +851,8 @@ export default function DropManagePage() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Time Remaining</span>
-                  <span className="font-semibold text-gray-900 dark:text-white font-mono">{timeLeft}</span>
+                  <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Status</span>
+                  <span className="font-semibold text-gray-900 dark:text-white font-mono text-xs">{timeLeft}</span>
                 </div>
               </div>
             </div>
