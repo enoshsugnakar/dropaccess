@@ -106,6 +106,18 @@ export default function DropAccessPage() {
   const [showLinksDropdown, setShowLinksDropdown] = useState(false)
   const [allLinks, setAllLinks] = useState<PDFLink[]>([])
 
+  // Debug logging
+  useEffect(() => {
+    console.log('Current state:', {
+      viewMode,
+      dropData: !!dropData,
+      contentUrl: !!contentUrl,
+      contentType,
+      pdfLoaded,
+      email
+    })
+  }, [viewMode, dropData, contentUrl, contentType, pdfLoaded, email])
+
   // Enhanced security
   useEffect(() => {
     const preventContext = (e: Event) => {
@@ -315,6 +327,23 @@ export default function DropAccessPage() {
     }
   }
 
+  /// Session validation
+const isValidSession = (session: VerificationSession): boolean => {
+  try {
+    return (
+      session.dropId === dropId &&
+      !!session.email &&
+      session.expiresAt > Date.now() &&
+      (!session.accessExpiresAt || session.accessExpiresAt > Date.now()) &&
+      !!session.dropData &&
+      !!session.contentUrl &&
+      !!session.contentType
+    )
+  } catch {
+    return false
+  }
+}
+
   // Determine link type
   const getLinkType = (url: string): 'external' | 'internal' | 'email' | 'other' => {
     try {
@@ -418,6 +447,24 @@ export default function DropAccessPage() {
           links.push(...page.links)
         })
         setAllLinks(links)
+        
+        // Update session with cached PDF data if we're in content mode
+        if (viewMode === 'content') {
+          setTimeout(() => {
+            const currentSession = getValidSession()
+            if (currentSession) {
+              saveVerificationSession(
+                currentSession.email,
+                personalExpiresAt,
+                contentUrl,
+                contentType,
+                dropData,
+                cachedPages
+              )
+              console.log('Session updated with cached PDF data')
+            }
+          }, 500)
+        }
         return
       }
     }
@@ -559,6 +606,25 @@ export default function DropAccessPage() {
       setPdfPages(pages)
       setAllLinks(allExtractedLinks)
       setPdfLoaded(true)
+
+      // Update session with PDF data if we're in content mode
+      if (viewMode === 'content') {
+        setTimeout(() => {
+          const currentSession = getValidSession()
+          if (currentSession) {
+            saveVerificationSession(
+              currentSession.email,
+              personalExpiresAt,
+              contentUrl,
+              contentType,
+              dropData,
+              pages // Save the newly converted pages
+            )
+            console.log('Session updated with PDF data')
+          }
+        }, 500)
+      }
+
       console.log(`Successfully processed ${pages.length} pages with ${allExtractedLinks.length} total links`)
 
     } catch (error) {
@@ -566,44 +632,66 @@ export default function DropAccessPage() {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
       setPdfError(`Failed to load PDF: ${errorMessage}`)
     }
-  }, [dropId])
+  }, [dropId, viewMode, personalExpiresAt, contentUrl, contentType, dropData])
 
   // Handle link clicks with analytics
-  const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
+  // Handle link clicks with analytics
+const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
+  event.preventDefault()
+  event.stopPropagation()
+  
+  try {
+    console.log(`PDF link clicked: "${link.text}" -> ${link.url} (Page ${link.pageIndex + 1})`)
     
-    try {
-      console.log(`PDF link clicked: "${link.text}" -> ${link.url} (Page ${link.pageIndex + 1})`)
-      
-      // Validate URL
-      try {
-        const linkUrl = new URL(link.url.startsWith('mailto:') ? link.url : `http://${link.url.replace(/^https?:\/\//, '')}`)
-        const allowedProtocols = ['http:', 'https:', 'mailto:']
-        
-        if (!allowedProtocols.includes(linkUrl.protocol)) {
-          throw new Error('Invalid protocol')
-        }
-      } catch (urlError) {
-        console.error('Invalid URL:', link.url)
-        toast.error('Invalid link detected')
-        return
-      }
-      
-      // Open link securely
-      const newWindow = window.open('', '_blank', 'noopener,noreferrer,width=1024,height=768')
-      if (newWindow) {
-        newWindow.location.href = link.url
-        toast.success(`Opened: ${truncateText(link.text, 20)}`)
-        setShowLinksDropdown(false) // Close dropdown after click
-      } else {
-        toast.error('Popup blocked. Please allow popups for this site.')
-      }
-    } catch (error) {
-      console.error('Error opening link:', error)
-      toast.error('Failed to open link')
+    let finalUrl = link.url.trim()
+    
+    // Handle different URL formats
+    if (finalUrl.startsWith('mailto:')) {
+      // Email links - use as-is
+      window.location.href = finalUrl
+      toast.success(`Opening email: ${truncateText(link.text, 20)}`)
+      setShowLinksDropdown(false)
+      return
+    } else if (finalUrl.startsWith('http://') || finalUrl.startsWith('https://')) {
+      // Already has protocol - use as-is
+      // finalUrl is already correct
+    } else if (finalUrl.startsWith('www.')) {
+      // Add https to www links
+      finalUrl = `https://${finalUrl}`
+    } else if (finalUrl.includes('.') && !finalUrl.startsWith('#')) {
+      // Looks like a domain - add https
+      finalUrl = `https://${finalUrl}`
+    } else {
+      // Internal link or other format
+      console.warn('Unhandled link format:', finalUrl)
+      toast.error('Unsupported link format')
+      return
     }
+    
+    // Validate the final URL
+    try {
+      new URL(finalUrl)
+    } catch (urlError) {
+      console.error('Invalid URL after processing:', finalUrl)
+      toast.error('Invalid link detected')
+      return
+    }
+    
+    console.log('Opening URL:', finalUrl)
+    
+    // Open link securely
+    const newWindow = window.open(finalUrl, '_blank', 'noopener,noreferrer,width=1024,height=768')
+    if (newWindow) {
+      toast.success(`Opened: ${truncateText(link.text, 20)}`)
+      setShowLinksDropdown(false)
+    } else {
+      toast.error('Popup blocked. Please allow popups for this site.')
+    }
+  } catch (error) {
+    console.error('Error opening link:', error)
+    toast.error('Failed to open link')
   }
+}
 
   // Trigger PDF conversion when content changes
   useEffect(() => {
@@ -658,6 +746,7 @@ export default function DropAccessPage() {
       filteredSessions.push(session)
       const validSessions = filteredSessions.filter(s => s.expiresAt > Date.now())
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(validSessions))
+      console.log('Session saved successfully')
     } catch (error) {
       console.error('Failed to save verification session:', error)
     }
@@ -675,12 +764,10 @@ export default function DropAccessPage() {
   const getValidSession = (): VerificationSession | null => {
     try {
       const sessions = getStoredSessions()
-      return sessions.find(s => 
-        s.dropId === dropId && 
-        s.expiresAt > Date.now() &&
-        (!s.accessExpiresAt || s.accessExpiresAt > Date.now())
-      ) || null
+      const session = sessions.find(s => s.dropId === dropId)
+      return session && isValidSession(session) ? session : null
     } catch (error) {
+      console.error('Error getting session:', error)
       return null
     }
   }
@@ -691,39 +778,54 @@ export default function DropAccessPage() {
       const filteredSessions = sessions.filter(s => s.dropId !== dropId)
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(filteredSessions))
       clearPdfCache()
+      console.log('Session cleared')
     } catch (error) {
       console.error('Failed to clear session:', error)
     }
   }
 
   const restoreFromCache = useCallback((session: VerificationSession) => {
-    if (session.dropData) {
-      setDropData(session.dropData)
+    console.log('Restoring session:', session)
+    
+    try {
+      if (session.dropData) {
+        setDropData(session.dropData)
+        console.log('Drop data restored')
+      }
+      if (session.contentUrl) {
+        setContentUrl(session.contentUrl)
+        console.log('Content URL restored:', session.contentUrl)
+      }
+      if (session.contentType) {
+        setContentType(session.contentType)
+        console.log('Content type restored:', session.contentType)
+      }
+      if (session.accessExpiresAt) {
+        setPersonalExpiresAt(new Date(session.accessExpiresAt))
+        console.log('Personal expiry restored')
+      }
+      if (session.pdfPages && session.contentType === 'pdf') {
+        setPdfPages(session.pdfPages)
+        setTotalPages(session.pdfPages.length)
+        setPdfLoaded(true)
+        setLoadingProgress(100)
+        
+        // Extract all links from cached pages
+        const links: PDFLink[] = []
+        session.pdfPages.forEach(page => {
+          links.push(...page.links)
+        })
+        setAllLinks(links)
+        console.log('PDF pages and links restored from session cache')
+      }
+      setEmail(session.email)
+      console.log('Session restoration complete')
+    } catch (error) {
+      console.error('Error restoring from cache:', error)
+      // Clear corrupted session and force re-verification
+      clearSession()
+      setViewMode('verification')
     }
-    if (session.contentUrl) {
-      setContentUrl(session.contentUrl)
-    }
-    if (session.contentType) {
-      setContentType(session.contentType)
-    }
-    if (session.accessExpiresAt) {
-      setPersonalExpiresAt(new Date(session.accessExpiresAt))
-    }
-    if (session.pdfPages && session.contentType === 'pdf') {
-      setPdfPages(session.pdfPages)
-      setTotalPages(session.pdfPages.length)
-      setPdfLoaded(true)
-      setLoadingProgress(100)
-      
-      // Extract all links from cached pages
-      const links: PDFLink[] = []
-      session.pdfPages.forEach(page => {
-        links.push(...page.links)
-      })
-      setAllLinks(links)
-      console.log('PDF pages and links restored from session cache')
-    }
-    setEmail(session.email)
   }, [])
 
   const getAccessType = () => {
@@ -857,10 +959,16 @@ export default function DropAccessPage() {
       // Check for existing valid session first
       const existingSession = getValidSession()
       if (existingSession) {
-        console.log('Restoring from cache...')
-        restoreFromCache(existingSession)
-        setViewMode('content')
-        return
+        console.log('Found existing session, restoring...')
+        try {
+          restoreFromCache(existingSession)
+          setViewMode('content')
+          return
+        } catch (error) {
+          console.error('Failed to restore session, clearing and re-verifying:', error)
+          clearSession()
+          // Continue to verification
+        }
       }
 
       const { data: dropResults, error: dropError } = await supabase
@@ -1003,16 +1111,21 @@ export default function DropAccessPage() {
 
       await loadContent()
 
-      saveVerificationSession(
-        email.toLowerCase().trim(), 
-        sessionExpiry, 
-        contentUrl, 
-        contentType, 
-        dropData,
-        pdfPages
-      )
-
       setViewMode('content')
+      
+      // Save session AFTER everything is loaded and state is set
+      setTimeout(() => {
+        saveVerificationSession(
+          email.toLowerCase().trim(), 
+          sessionExpiry, 
+          contentUrl, 
+          contentType, 
+          dropData,
+          pdfPages
+        )
+        console.log('Session saved after content load')
+      }, 1000) // Give time for all state to settle
+
       toast.success('Email verified successfully')
 
     } catch (err) {
@@ -1147,7 +1260,6 @@ export default function DropAccessPage() {
       case 'pdf':
         return (
           <div className={baseClasses}>
-            
             {/* PDF Content */}
             <div className="relative w-full h-full overflow-auto bg-gray-400 p-4">
               {pdfError ? (
@@ -1214,9 +1326,9 @@ export default function DropAccessPage() {
                   </div>
                   
                   {/* Watermark */}
-<div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-xs pointer-events-none">
-  🔒 This content is securely protected by DropAccess
-</div>
+                  <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-xs pointer-events-none">
+                    🔒 This content is securely protected by DropAccess
+                  </div>
                 </div>
               )}
             </div>
@@ -1506,7 +1618,6 @@ export default function DropAccessPage() {
 
   return (
     <div className="h-screen bg-black relative">
-      
       {/* Header overlay */}
       <div 
         className={`absolute top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm text-white transition-all duration-300 ${
@@ -1515,101 +1626,113 @@ export default function DropAccessPage() {
         onMouseEnter={() => setShowHeader(true)}
       >
         <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center space-x-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleLogout}
-              className="text-white hover:text-gray-300 hover:bg-white/10"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-            <div>
-              <h1 className="text-lg font-semibold">{dropData?.name}</h1>
-              <div className="flex items-center space-x-4 text-sm text-gray-300">
-                <span className="flex items-center">
-                  <Clock className="w-3 h-3 mr-1 text-red-400" />
-                  <span className="text-red-300 font-medium">{timeRemaining}</span>
-                </span>
-                <span className="flex items-center">
-                  <CheckCircle className="w-3 h-3 mr-1" />
-                  {email}
-                </span>
-                
-                {contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center space-x-4">
+             { /*<Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                className="text-white hover:text-gray-300 hover:bg-white/10"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back
+              </Button>*/}
+              <div>
+                <h1 className="text-lg font-semibold">{dropData?.name}</h1>
+                <div className="flex items-center space-x-4 text-sm text-gray-300">
                   <span className="flex items-center">
-                    <Link2 className="w-3 h-3 mr-1" />
-                    <span className="text-blue-300">
-                      {allLinks.length} links
-                    </span>
+                    <Clock className="w-3 h-3 mr-1 text-red-400" />
+                    <span className="text-red-300 font-medium">{timeRemaining}</span>
                   </span>
-                )}
-                {pdfLoaded && allLinks.length > 0 && (
-              <div className="absolute top-4 mt-30 right-4 z-50">
-                <div className="relative">
-                  {/* Trigger Button */}
-                  <button
-                    className="pdf-links-trigger bg-white/95 backdrop-blur-sm border  border-gray-200 rounded-lg px-4 py-2 shadow-lg hover:bg-white transition-all duration-200 flex items-center gap-2"
-                    onClick={() => setShowLinksDropdown(!showLinksDropdown)}
-                  >
-                    <Link2 className="w-4 h-4 text-blue-600" />
-                    <span className="text-sm font-medium text-gray-700">
-                      {allLinks.length} Link{allLinks.length !== 1 ? 's' : ''}
-                    </span>
-                    {showLinksDropdown ? (
-                      <ChevronUp className="w-3 h-3 text-gray-500" />
+                  <span className="flex items-center">
+                    <CheckCircle className="w-3 h-3 mr-1 truncate" />
+                    {email}
+                  </span>
+                 {/*} <span className="flex items-center">
+                    {getAccessType() === 'creation' ? (
+                      <>
+                        <CalendarDays className="w-3 h-3 mr-1" />
+                        Shared Deadline
+                      </>
                     ) : (
-                      <ChevronDown className="w-3 h-3 text-gray-500" />
+                      <>
+                        <Timer className="w-3 h-3 mr-1" />
+                        Personal Timer
+                      </>
                     )}
-                  </button>
-
-                  {/* Dropdown Menu */}
-                  {showLinksDropdown && (
-                    <div className="pdf-links-dropdown absolute top-full right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto">
-                      <div className="p-3 border-b border-gray-100 bg-gray-50">
-                        <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                          <ExternalLink className="w-4 h-4" />
-                          PDF Links ({allLinks.length})
-                        </h3>
-                      </div>
-                      
-                      <div className="py-2">
-                        {allLinks.map((link, index) => (
-                          <button
-                            key={index}
-                            className="pdf-link-item w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-50 last:border-b-0"
-                            onClick={(e) => handleLinkClick(link, e)}
-                            title={`${link.text} - ${link.url}`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="flex-shrink-0 mt-0.5 text-gray-400">
-                                {getLinkIcon(link.type)}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium text-gray-900 truncate">
-                                  {truncateText(link.text, 30)}
-                                </div>
-                                <div className="text-xs text-gray-500 mt-1 flex items-center gap-3">
-                                  <span>Pg {link.pageIndex + 1}</span>
-                                  <span>•</span>
-                                  <span className="truncate" style={{ maxWidth: '180px' }}>
-                                    {link.url}
-                                  </span>
-                                </div>
-                              </div>
-                              <ExternalLink className="w-3 h-3 text-gray-400 flex-shrink-0 mt-1" />
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  </span>*/}
+                  {/*contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
+                    <span className="flex items-center">
+                      <Link2 className="w-3 h-3 mr-1" />
+                      <span className="text-blue-300">
+                        {allLinks.length} links
+                      </span>
+                    </span>
+                  )*/}
                 </div>
               </div>
-            )}
-              </div>
             </div>
+
+            {/* PDF Links Dropdown in Header */}
+            {contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
+              <div className="relative">
+                <button
+                  className="pdf-links-trigger bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg px-3 py-2 hover:bg-white/20 transition-all duration-200 flex items-center gap-2"
+                  onClick={() => setShowLinksDropdown(!showLinksDropdown)}
+                >
+                  <Link2 className="w-4 h-4 text-blue-400" />
+                  <span className="text-sm font-medium text-white">
+                    {allLinks.length} Link{allLinks.length !== 1 ? 's' : ''}
+                  </span>
+                  {showLinksDropdown ? (
+                    <ChevronUp className="w-3 h-3 text-gray-300" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3 text-gray-300" />
+                  )}
+                </button>
+
+                {showLinksDropdown && (
+                  <div className="pdf-links-dropdown absolute top-full right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-[60] max-h-96 overflow-y-auto">
+                    <div className="p-3 border-b border-gray-100 bg-gray-50">
+                      <h3 className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                        <ExternalLink className="w-4 h-4" />
+                        PDF Links ({allLinks.length})
+                      </h3>
+                    </div>
+                    
+                    <div className="py-2">
+                      {allLinks.map((link, index) => (
+                        <button
+                          key={index}
+                          className="pdf-link-item w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-50 last:border-b-0"
+                          onClick={(e) => handleLinkClick(link, e)}
+                          title={`${link.text} - ${link.url}`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="flex-shrink-0 mt-0.5 text-gray-400">
+                              {getLinkIcon(link.type)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-gray-900 truncate">
+                                {truncateText(link.text, 30)}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                <span>Pg {link.pageIndex + 1}</span>
+                                <span>•</span>
+                                <span className="truncate" style={{ maxWidth: '180px' }}>
+                                  {link.url}
+                                </span>
+                              </div>
+                            </div>
+                            <ExternalLink className="w-3 h-3 text-gray-400 flex-shrink-0 mt-1" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
