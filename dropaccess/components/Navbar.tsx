@@ -6,7 +6,6 @@ import { useAuth } from './AuthProvider'
 import { useRouter, usePathname } from 'next/navigation'
 import { Button } from './ui/button'
 import { 
-  Shield, 
   Plus, 
   User, 
   LogOut, 
@@ -20,6 +19,39 @@ import {
   Moon,
   Sun
 } from 'lucide-react'
+
+// Logo Component
+interface LogoProps {
+  variant?: 'light' | 'dark'
+  size?: 'sm' | 'md' | 'lg'
+  className?: string
+}
+
+const sizeMap = {
+  sm: 'h-6 w-auto',
+  md: 'h-8 w-auto', 
+  lg: 'h-10 w-auto',
+}
+
+function Logo({ variant = 'light', size = 'md', className }: LogoProps) {
+  return (
+    <div className={`flex items-center ${className}`}>
+      {variant === 'dark' ? (
+        <img 
+          src="/dropaccess_dark.svg" 
+          alt="DropAccess" 
+          className={sizeMap[size]}
+        />
+      ) : (
+        <img 
+          src="/dropaccess_white.svg" 
+          alt="DropAccess" 
+          className={sizeMap[size]}
+        />
+      )}
+    </div>
+  )
+}
 
 // Custom Dropdown Component
 interface CustomDropdownProps {
@@ -71,12 +103,12 @@ interface DropdownItemProps {
 
 function DropdownItem({ onClick, children, className = '' }: DropdownItemProps) {
   return (
-    <button
+    <Button
       onClick={onClick}
       className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center transition-colors ${className}`}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -194,11 +226,12 @@ export function Navbar() {
                 </Button>
               )}
               
-              <Link href={user ? "/dashboard" : "/"} className="flex items-center space-x-2">
-                <Shield className="w-7 h-7 text-primary" />
-                <span className="text-xl font-semibold text-gray-900 dark:text-white">
-                  DropAccess
-                </span>
+              <Link href={user ? "/dashboard" : "/"} className="flex items-center">
+                <Logo 
+                  variant={isDark ? 'dark' : 'light'} 
+                  size="md" 
+                  className="transition-transform hover:scale-105" 
+                />
               </Link>
 
               {/* Desktop Navigation - Only show for authenticated users */}
@@ -325,12 +358,10 @@ export function Navbar() {
           <div className="fixed left-0 top-0 h-full w-80 bg-white dark:bg-gray-900 shadow-xl transform transition-transform duration-200 ease-out">
             {/* Sidebar Header */}
             <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-              <div className="flex items-center space-x-2">
-                <Shield className="w-6 h-6 text-primary" />
-                <span className="text-lg font-semibold text-gray-900 dark:text-white">
-                  DropAccess
-                </span>
-              </div>
+              <Logo 
+                variant={isDark ? 'dark' : 'light'} 
+                size="sm" 
+              />
               <Button
                 variant="ghost"
                 size="sm"
@@ -396,29 +427,29 @@ export function Navbar() {
             {/* Sidebar Footer */}
             <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
               {/* Dark Mode Toggle */}
-              <button
+              <Button
                 onClick={toggleDarkMode}
                 className="flex items-center space-x-3 w-full p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
                 {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
                 <span className="text-sm">{isDark ? 'Light Mode' : 'Dark Mode'}</span>
-              </button>
+              </Button>
               
-              <button
+              <Button
                 onClick={() => router.push('/help')}
                 className="flex items-center space-x-3 w-full p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
                 <HelpCircle className="w-4 h-4" />
                 <span className="text-sm">Help & Support</span>
-              </button>
+              </Button>
               
-              <button
+              <Button
                 onClick={handleSignOut}
                 className="flex items-center space-x-3 w-full p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
               >
                 <LogOut className="w-4 h-4" />
                 <span className="text-sm">Sign Out</span>
-              </button>
+              </Button>
             </div>
           </div>
         </div>
