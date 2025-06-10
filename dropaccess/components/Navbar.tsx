@@ -44,7 +44,7 @@ function Logo({ variant = 'light', size = 'md', className }: LogoProps) {
         />
       ) : (
         <img 
-          src="/dropaccess_white.svg" 
+          src="/dropaccess_light.svg" 
           alt="DropAccess" 
           className={sizeMap[size]}
         />

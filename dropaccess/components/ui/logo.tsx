@@ -29,7 +29,7 @@ export function Logo({
   className, 
   showText = true 
 }: LogoProps) {
-  const logoSrc = variant === 'dark' ? '/dropaccess_white.svg' : '/dropaccess_dark.svg';
+  const logoSrc = variant === 'dark' ? '/dropaccess_light.svg' : '/dropaccess_dark.svg';
   const dimensions = sizeMap[size];
 
   if (!showText) {
