@@ -1,3 +1,5 @@
+'use client'
+
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,41 +22,31 @@ import {
   Timer,
   Mail
 } from "lucide-react";
+import { useAuth } from '@/components/AuthProvider';
+import { useEffect, useState } from 'react';
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
 
 export default function Home() {
+  const { user, loading } = useAuth();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Show loading state until mounted and auth is ready
+  if (!mounted || loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-gray-900">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900">
-      {/* Navigation 
-      <nav className="sticky top-0 z-50 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-2">
-              <Shield className="w-8 h-8 text-primary" />
-              <span className="text-xl font-bold text-gray-900 dark:text-white">DropAccess</span>
-            </div>
-            <div className="hidden md:flex items-center space-x-8">
-              <Link href="#features" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-                Features
-              </Link>
-              <Link href="#pricing" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-                Pricing
-              </Link>
-              <Link href="#use-cases" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-                Use Cases
-              </Link>
-            </div>
-            <div className="flex items-center space-x-4">
-              <Link href="/auth">
-                <Button variant="ghost" className="font-medium">Sign In</Button>
-              </Link>
-              <Link href="/auth">
-                <Button className="font-medium">Get Started</Button>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </nav>*/}
-
       {/* Hero Section */}
       <section className="relative overflow-hidden">
         {/* Background Elements */}
@@ -80,17 +72,37 @@ export default function Home() {
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-12">
-              <Link href="/auth">
-                <Button size="lg" className="px-8 py-3 font-medium text-lg">
-                  Start Sharing Securely
-                  <ArrowRight className="ml-2 w-5 h-5" />
-                </Button>
-              </Link>
-              <Link href="#demo">
-                <Button size="lg" variant="outline" className="px-8 py-3 font-medium text-lg">
-                  Watch Demo
-                </Button>
-              </Link>
+              {user ? (
+                // Authenticated user buttons
+                <>
+                  <Link href="/dashboard">
+                    <Button size="lg" className="px-8 py-3 font-medium text-lg">
+                      Go to Dashboard
+                      <ArrowRight className="ml-2 w-5 h-5" />
+                    </Button>
+                  </Link>
+                  <Link href="/drops/new">
+                    <Button size="lg" variant="outline" className="px-8 py-3 font-medium text-lg">
+                      Create New Drop
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                // Non-authenticated user buttons
+                <>
+                  <Link href="/auth">
+                    <Button size="lg" className="px-8 py-3 font-medium text-lg">
+                      Start Sharing Securely
+                      <ArrowRight className="ml-2 w-5 h-5" />
+                    </Button>
+                  </Link>
+                  <Link href="#demo">
+                    <Button size="lg" variant="outline" className="px-8 py-3 font-medium text-lg">
+                      Watch Demo
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
 
             {/* Trust Indicators */}
@@ -477,12 +489,21 @@ export default function Home() {
             Join thousands of professionals who trust DropAccess for secure file and link sharing
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/auth">
-              <Button size="lg" variant="secondary" className="px-8 py-3 font-medium text-lg">
-                Start Free Today
-                <ArrowRight className="ml-2 w-5 h-5" />
-              </Button>
-            </Link>
+            {user ? (
+              <Link href="/dashboard">
+                <Button size="lg" variant="secondary" className="px-8 py-3 font-medium text-lg">
+                  Go to Dashboard
+                  <ArrowRight className="ml-2 w-5 h-5" />
+                </Button>
+              </Link>
+            ) : (
+              <Link href="/auth">
+                <Button size="lg" variant="secondary" className="px-8 py-3 font-medium text-lg">
+                  Start Free Today
+                  <ArrowRight className="ml-2 w-5 h-5" />
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
       </section>
@@ -549,7 +570,7 @@ export default function Home() {
           
           <div className="border-t border-gray-200 dark:border-gray-800 mt-8 pt-8 text-center">
             <p className="text-gray-600 dark:text-gray-400 text-sm">
-              &copy; 2024 DropAccess. All rights reserved. Built with security and privacy in mind.
+              &copy; 2025 DropAccess. All rights reserved. Built with security and privacy in mind.
             </p>
           </div>
         </div>

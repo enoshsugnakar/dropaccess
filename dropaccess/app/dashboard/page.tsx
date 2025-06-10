@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
+import { useSubscription } from '@/hooks/use-subscription'
 import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -32,7 +33,8 @@ import {
   RefreshCw,
   Timer,
   CalendarDays,
-  AlertCircle
+  AlertCircle,
+  Crown
 } from 'lucide-react'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
@@ -311,6 +313,21 @@ export default function DashboardPage() {
     totalAccesses: 0,
     totalRecipients: 0
   })
+
+  // Get subscription data
+  const { 
+    planLimits, 
+    usage, 
+    currentPlan, 
+    canCreateDrop, 
+    getRemainingDrops, 
+    getStoragePercentage, 
+    isNearLimit,
+    getPlanPrice,
+    loading: subscriptionLoading 
+  } = useSubscription()
+
+  const remainingDrops = getRemainingDrops()
 
   // Check if data is cached and still valid
   const isCacheValid = (timestamp: number) => {
@@ -652,7 +669,7 @@ export default function DashboardPage() {
   }
 
   // Show skeleton while loading initial data
-  if (loading || isLoading) {
+  if (loading || isLoading || subscriptionLoading) {
     return <DashboardSkeleton viewMode={viewMode} />
   }
 
@@ -666,14 +683,41 @@ export default function DashboardPage() {
             <div className="mb-6 lg:mb-0">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
                 Dashboard
+                {currentPlan !== 'free' && (
+                  <Badge className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white border-0">
+                    <Crown className="w-3 h-3 mr-1" />
+                    {currentPlan === 'weekly' ? 'Weekly' : currentPlan === 'monthly' ? 'Monthly' : 'Business'}
+                  </Badge>
+                )}
               </h1>
               <p className="mt-1 text-gray-500 dark:text-gray-400">
                 Manage your secure drops and access models
+                {remainingDrops && (
+                  <>
+                    <span> • </span>
+                    <span className={remainingDrops.count <= 2 ? 'text-orange-600 dark:text-orange-400' : ''}>
+                      {remainingDrops.count} drops remaining this {remainingDrops.period}
+                    </span>
+                  </>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-3">
+              {!canCreateDrop() && (
+                <Button 
+                  variant="outline" 
+                  onClick={() => router.push('/pricing')}
+                  className="px-5 py-2.5 rounded-lg font-medium border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+                >
+                  <Crown className="w-4 h-4 mr-2" />
+                  Upgrade Plan
+                </Button>
+              )}
               <Link href="/drops/new">
-                <Button className="px-5 py-2.5 rounded-lg font-medium">
+                <Button 
+                  className="px-5 py-2.5 rounded-lg font-medium"
+                  disabled={!canCreateDrop()}
+                >
                   <Plus className="w-4 h-4 mr-2" />
                   Create Drop
                 </Button>
@@ -682,26 +726,67 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Stats - 2x2 Grid on Mobile */}
+        {/* Stats - 2x2 Grid on Mobile with Subscription Data */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-2 md:mb-3">
-              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Total Drops</span>
-              <FileUp className="w-3 h-3 md:w-4 md:h-4 text-blue-600 dark:text-blue-400" />
+              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">
+                Drops {remainingDrops ? 'Used' : 'Total'}
+              </span>
+                            <FileUp className="w-3 h-3 md:w-4 md:h-4 text-blue-600 dark:text-blue-400" />
             </div>
             <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
-              {stats.totalDrops}
+              {remainingDrops ? (
+                currentPlan === 'weekly' 
+                  ? `${usage.dropsThisWeek}/${remainingDrops.total}` 
+                  : `${usage.dropsThisMonth}/${remainingDrops.total}`
+              ) : stats.totalDrops}
             </div>
+            {remainingDrops && (
+              <div className="mt-1">
+                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-blue-600 dark:bg-blue-400 transition-all duration-300"
+                    style={{ 
+                      width: `${Math.min(100, currentPlan === 'weekly' 
+                        ? (usage.dropsThisWeek / remainingDrops.total) * 100
+                        : (usage.dropsThisMonth / remainingDrops.total) * 100
+                      )}%` 
+                    }}
+                  />
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {remainingDrops.count} remaining this {remainingDrops.period}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-2 md:mb-3">
-              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Active Drops</span>
+              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Storage Used</span>
               <Activity className="w-3 h-3 md:w-4 md:h-4 text-green-600 dark:text-green-400" />
             </div>
-            <div className="text-lg md:text-2xl font-semibold text-green-600 dark:text-green-400">
-              {stats.activeDrops}
+            <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
+              {planLimits ? (
+                `${Math.round(usage.storageUsedMB)}MB / ${Math.round(planLimits.max_storage_gb * 1024)}MB`
+              ) : (
+                `${Math.round(usage.storageUsedMB)}MB`
+              )}
             </div>
+            {planLimits && (
+              <div className="mt-1">
+                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-green-600 dark:bg-green-400 transition-all duration-300"
+                    style={{ width: `${getStoragePercentage()}%` }}
+                  />
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {getStoragePercentage().toFixed(1)}% used
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
@@ -712,18 +797,54 @@ export default function DashboardPage() {
             <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
               {stats.totalRecipients}
             </div>
+            {planLimits && (
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Max {planLimits.max_recipients_per_drop} per drop
+              </div>
+            )}
           </div>
 
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-2 md:mb-3">
-              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Total Views</span>
+              <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Plan</span>
               <TrendingUp className="w-3 h-3 md:w-4 md:h-4 text-orange-600 dark:text-orange-400" />
             </div>
-            <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
-              {stats.totalAccesses}
+            <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white capitalize">
+              {currentPlan}
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {getPlanPrice()}
             </div>
           </div>
         </div>
+
+        {/* Plan Limit Warning */}
+        {isNearLimit() && (
+          <div className="mb-6 bg-gradient-to-r from-orange-50 to-yellow-50 dark:from-orange-950/20 dark:to-yellow-950/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-orange-800 dark:text-orange-200">
+                  Approaching Plan Limit
+                </h3>
+                <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
+                  {currentPlan === 'weekly' 
+                    ? `You've used ${usage.dropsThisWeek} of ${planLimits?.drops_per_week} drops this week.`
+                    : `You've used ${usage.dropsThisMonth} of ${planLimits?.drops_per_month} drops this month.`
+                  } Consider upgrading for more capacity.
+                </p>
+              </div>
+              <Button 
+                size="sm" 
+                variant="outline" 
+                onClick={() => router.push('/pricing')}
+                className="border-orange-300 text-orange-700 hover:bg-orange-100 dark:border-orange-600 dark:text-orange-300 dark:hover:bg-orange-950/30"
+              >
+                Upgrade
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Controls */}
         <div className="mb-6">
@@ -752,7 +873,8 @@ export default function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button
+            <div className="flex items-center gap-3">
+              <Button
                 variant="outline"
                 size="sm"
                 onClick={handleRefresh}
@@ -762,23 +884,24 @@ export default function DashboardPage() {
                 <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
                 {isRefreshing ? 'Refreshing...' : 'Refresh'}
               </Button>
-            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-              <Button
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('grid')}
-                className="h-8 px-3"
-              >
-                <Grid3X3 className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={viewMode === 'list' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('list')}
-                className="h-8 px-3"
-              >
-                <List className="w-4 h-4" />
-              </Button>
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('grid')}
+                  className="h-8 px-3"
+                >
+                  <Grid3X3 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  className="h-8 px-3"
+                >
+                  <List className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -796,13 +919,23 @@ export default function DashboardPage() {
                 : 'Create your first secure drop to get started'
               }
             </p>
-            {!searchQuery && filterStatus === 'all' && (
+            {!searchQuery && filterStatus === 'all' && canCreateDrop() && (
               <Link href="/drops/new">
                 <Button className="font-medium">
                   <Plus className="w-4 h-4 mr-2" />
                   Create Drop
                 </Button>
               </Link>
+            )}
+            {!canCreateDrop() && (
+              <Button 
+                variant="outline"
+                onClick={() => router.push('/pricing')}
+                className="font-medium border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+              >
+                <Crown className="w-4 h-4 mr-2" />
+                Upgrade to Create More Drops
+              </Button>
             )}
           </div>
         ) : viewMode === 'grid' ? (

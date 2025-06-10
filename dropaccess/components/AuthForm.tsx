@@ -23,7 +23,14 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
   const [resetMode, setResetMode] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
-  const { signIn, signUp, resetPassword } = useAuth()
+  // Use the correct method names from your AuthProvider
+  const { signInWithEmail, signUpWithEmail } = useAuth()
+
+  const resetPassword = async (email: string) => {
+    // Add reset password functionality if needed
+    // For now, return a placeholder
+    return { error: { message: 'Password reset not implemented yet' } }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -42,17 +49,23 @@ export function AuthForm({ mode, onToggleMode }: AuthFormProps) {
         return
       }
 
-      const { error } = mode === 'signin' 
-        ? await signIn(email, password)
-        : await signUp(email, password)
+      // Use the correct method names
+      const result = mode === 'signin' 
+        ? await signInWithEmail(email, password)
+        : await signUpWithEmail(email, password)
 
-      if (error) {
-        setError(error.message)
+      if (result.error) {
+        setError(result.error.message)
+        toast.error(result.error.message)
       } else if (mode === 'signup') {
         toast.success('Check your email to confirm your account!')
+      } else {
+        toast.success('Welcome back!')
       }
-    } catch (err) {
-      setError('An unexpected error occurred')
+    } catch (err: any) {
+      const errorMessage = err?.message || 'An unexpected error occurred'
+      setError(errorMessage)
+      toast.error(errorMessage)
     } finally {
       setLoading(false)
     }
