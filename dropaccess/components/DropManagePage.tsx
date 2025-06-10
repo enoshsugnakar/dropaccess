@@ -34,7 +34,7 @@ import {
   UserCheck
 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { Navbar } from '@/components/Navbar'
+
 
 interface DropDetails {
   id: string
@@ -154,7 +154,7 @@ function StatsSkeleton() {
 function ManagePageSkeleton() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <Navbar />
+ 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20">
         {/* Header Skeleton */}
         <div className="mb-8">
@@ -543,7 +543,6 @@ export default function DropManagePage() {
   if (!drop) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <Navbar />
         <div className="flex items-center justify-center min-h-screen">
           <div className="bg-white dark:bg-gray-800 rounded-xl p-8 border border-gray-200 dark:border-gray-700 max-w-md w-full text-center">
             <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
@@ -566,7 +565,6 @@ export default function DropManagePage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <Navbar />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20">
         {/* Header */}
         <div className="mb-8">
