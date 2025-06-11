@@ -1,14 +1,12 @@
+'use client'
 
-import { DropForm } from "@/components/DropForm";
-import { Navbar } from "@/components/Navbar";
+import { ClientAuthWrapper } from '@/components/ClientAuthWrapper'
+import { DropForm } from '@/components/DropForm'
 
 export default function NewDropPage() {
   return (
-    <div>
-      <Navbar/>
-      <div className="mt-5">
-        <DropForm />
-      </div>
-    </div>
-  );
+    <ClientAuthWrapper requireAuth={true}>
+      <DropForm />
+    </ClientAuthWrapper>
+  )
 }

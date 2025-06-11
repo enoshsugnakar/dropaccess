@@ -4,6 +4,7 @@ import './globals.css'
 import { PostHogProvider } from '@/components/PostHogProvider'
 import { AuthProvider } from '@/components/AuthProvider'
 import { Navbar } from '@/components/Navbar'
+import { Toaster } from 'react-hot-toast'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -30,10 +31,10 @@ export default function RootLayout({
       <body className={inter.className}>
         <PostHogProvider>
           <AuthProvider>
-            <Navbar />
-            <main>
+            <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
               {children}
-            </main>
+              <Toaster position="top-right" />
+            </div>
           </AuthProvider>
         </PostHogProvider>
       </body>

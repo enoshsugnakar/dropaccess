@@ -1,4 +1,5 @@
 'use client'
+
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
@@ -8,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Navbar } from '@/components/Navbar'
 import { Input } from '@/components/ui/input'
+import { ClientAuthWrapper } from '@/components/ClientAuthWrapper'
 import {
   Plus,
   Link2,
@@ -56,6 +58,7 @@ interface Drop {
   one_time_access: boolean
   is_active: boolean
   created_at: string
+  updated_at: string
   recipient_count?: number
   access_count?: number
 }
@@ -294,7 +297,7 @@ function DropdownSeparator() {
   return <div className="h-px bg-gray-200 dark:bg-gray-600 my-1" />
 }
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   const { user, loading } = useAuth()
   const router = useRouter()
   const [drops, setDrops] = useState<Drop[]>([])
@@ -442,9 +445,7 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.push('/auth')
-    } else if (user) {
+    if (user) {
       // Try to load from cache first
       const cachedData = loadFromCache()
       
@@ -461,9 +462,11 @@ export default function DashboardPage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, loading])
+  }, [user])
 
   const fetchDrops = async (forceRefresh = false) => {
+    if (!user) return
+
     // If we just fetched recently and it's not a forced refresh, skip
     if (!forceRefresh && isCacheValid(lastFetch)) {
       return
@@ -658,13 +661,14 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-     <Navbar/>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20 mt-5 dark:bg-gray-900">
+      <Navbar />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20 mt-5">
         {/* Header */}
         <div className="mb-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
             <div className="mb-6 lg:mb-0">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                <Shield className="w-6 h-6 text-primary" />
                 Dashboard
               </h1>
               <p className="mt-1 text-gray-500 dark:text-gray-400">
@@ -752,7 +756,8 @@ export default function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button
+            <div className="flex items-center gap-2">
+              <Button
                 variant="outline"
                 size="sm"
                 onClick={handleRefresh}
@@ -762,23 +767,24 @@ export default function DashboardPage() {
                 <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
                 {isRefreshing ? 'Refreshing...' : 'Refresh'}
               </Button>
-            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-              <Button
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('grid')}
-                className="h-8 px-3"
-              >
-                <Grid3X3 className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={viewMode === 'list' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('list')}
-                className="h-8 px-3"
-              >
-                <List className="w-4 h-4" />
-              </Button>
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('grid')}
+                  className="h-8 px-3"
+                >
+                  <Grid3X3 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  className="h-8 px-3"
+                >
+                  <List className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -1041,5 +1047,13 @@ export default function DashboardPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <ClientAuthWrapper requireAuth={true}>
+      <DashboardPageContent />
+    </ClientAuthWrapper>
   )
 }

@@ -4,9 +4,10 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
 import { AuthForm } from '@/components/AuthForm'
-import { Loader2, Shield } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { ClientAuthWrapper } from '@/components/ClientAuthWrapper'
 
-export default function AuthPage() {
+function AuthPageContent() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const { user, loading } = useAuth()
   const router = useRouter()
@@ -41,8 +42,6 @@ export default function AuthPage() {
       </div>
 
       <div className="relative w-full max-w-md">
-        {/* Header */}
-
         {/* Auth Form */}
         <AuthForm 
           mode={mode} 
@@ -57,5 +56,13 @@ export default function AuthPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function AuthPage() {
+  return (
+    <ClientAuthWrapper requireAuth={false}>
+      <AuthPageContent />
+    </ClientAuthWrapper>
   )
 }

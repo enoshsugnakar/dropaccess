@@ -2,7 +2,7 @@
 
 import posthog from 'posthog-js'
 import { PostHogProvider as PHProvider } from 'posthog-js/react'
-import { useEffect, ReactNode } from 'react'
+import { useEffect, ReactNode, useState } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useAuth } from './AuthProvider'
 
@@ -30,9 +30,26 @@ function PostHogPageView(): null {
 }
 
 function PostHogAuthProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
+  const [mounted, setMounted] = useState(false)
+  
+  // Use a try-catch to handle cases where auth context might not be available
+  let user = null
+  try {
+    const auth = useAuth()
+    user = auth.user
+  } catch (error) {
+    // Auth context not available, which is fine during SSR or initial load
+    console.log('Auth context not available for PostHog, will retry when available')
+  }
 
   useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    // Only run this effect on the client side after mounting
+    if (!mounted) return
+
     if (user) {
       posthog.identify(user.id, {
         email: user.email,
@@ -43,14 +60,20 @@ function PostHogAuthProvider({ children }: { children: ReactNode }) {
     } else {
       posthog.reset()
     }
-  }, [user])
+  }, [user, mounted])
 
   return <>{children}</>
 }
 
 export function PostHogProvider({ children }: PostHogProviderProps) {
+  const [mounted, setMounted] = useState(false)
+
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && mounted) {
       const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
       const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com'
 
@@ -77,9 +100,14 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
         console.warn('PostHog key not found. Analytics will not work.')
       }
     }
-  }, [])
+  }, [mounted])
 
   const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
+
+  // Don't render anything during SSR
+  if (!mounted) {
+    return <>{children}</>
+  }
 
   if (!posthogKey) {
     // Return children without PostHog if no key is provided
@@ -99,8 +127,14 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
 
 // Custom hook for using PostHog analytics
 export function usePostHogAnalytics() {
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const trackEvent = (eventName: string, properties?: Record<string, any>) => {
-    if (typeof window !== 'undefined' && posthog) {
+    if (typeof window !== 'undefined' && mounted && posthog) {
       posthog.capture(eventName, {
         ...properties,
         timestamp: new Date().toISOString(),
@@ -111,13 +145,13 @@ export function usePostHogAnalytics() {
   }
 
   const identifyUser = (userId: string, traits?: Record<string, any>) => {
-    if (typeof window !== 'undefined' && posthog) {
+    if (typeof window !== 'undefined' && mounted && posthog) {
       posthog.identify(userId, traits)
     }
   }
 
   const setUserProperties = (properties: Record<string, any>) => {
-    if (typeof window !== 'undefined' && posthog) {
+    if (typeof window !== 'undefined' && mounted && posthog) {
       posthog.setPersonProperties(properties)
     }
   }
