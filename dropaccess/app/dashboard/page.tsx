@@ -23,7 +23,6 @@ import {
   Trash2,
   Download,
   Settings,
-  Shield,
   TrendingUp,
   Calendar,
   Filter,
@@ -164,7 +163,6 @@ function DashboardSkeleton({ viewMode }: { viewMode: 'grid' | 'list' }) {
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
             <div className="mb-6 lg:mb-0">
               <div className="flex items-center gap-3 mb-2">
-                <Shield className="w-6 h-6 text-primary" />
                 <div className="h-7 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
               </div>
               <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-48 animate-pulse"></div>
@@ -668,7 +666,6 @@ function DashboardPageContent() {
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
             <div className="mb-6 lg:mb-0">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                <Shield className="w-6 h-6 text-primary" />
                 Dashboard
               </h1>
               <p className="mt-1 text-gray-500 dark:text-gray-400">
@@ -792,7 +789,6 @@ function DashboardPageContent() {
         {/* Drops Display */}
         {filteredDrops.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-xl p-12 text-center border border-gray-200 dark:border-gray-700">
-            <Shield className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
               {searchQuery || filterStatus !== 'all' ? 'No drops found' : 'No drops yet'}
             </h3>

@@ -1,21 +1,213 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef } from 'react'
 import { useAuth } from './AuthProvider'
+import { useRouter, usePathname } from 'next/navigation'
 import { Button } from './ui/button'
-import { Shield, Menu, X, User, LogOut, Settings, Plus } from 'lucide-react'
+import { 
+  Plus, 
+  User, 
+  LogOut, 
+  LayoutDashboard, 
+  Menu, 
+  X, 
+  Settings, 
+  HelpCircle,
+  BarChart3,
+  Bell,
+  Moon,
+  Sun,
+  Shield
+} from 'lucide-react'
+
+// Logo Component
+interface LogoProps {
+  variant?: 'light' | 'dark'
+  size?: 'sm' | 'md' | 'lg'
+  className?: string
+}
+
+const sizeMap = {
+  sm: 'h-6 w-auto',
+  md: 'h-8 w-auto', 
+  lg: 'h-10 w-auto',
+}
+
+function Logo({ variant = 'light', size = 'md', className }: LogoProps) {
+  // Fallback to text logo if images aren't available
+  const [imageError, setImageError] = useState(false)
+
+  const handleImageError = () => {
+    setImageError(true)
+  }
+
+  if (imageError) {
+    // Fallback to text logo with icon
+    return (
+      <div className={`flex items-center space-x-2 ${className}`}>
+        <Shield className="w-6 h-6 text-primary" />
+        <span className="text-xl font-bold text-gray-900 dark:text-white">DropAccess</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`flex items-center ${className}`}>
+      {variant === 'dark' ? (
+        <img 
+          src="/dropaccess_dark.svg" 
+          alt="DropAccess" 
+          className={sizeMap[size]}
+          onError={handleImageError}
+        />
+      ) : (
+        <img 
+          src="/dropaccess_light.svg" 
+          alt="DropAccess" 
+          className={sizeMap[size]}
+          onError={handleImageError}
+        />
+      )}
+    </div>
+  )
+}
+
+// Custom Dropdown Component
+interface CustomDropdownProps {
+  trigger: React.ReactNode
+  children: React.ReactNode
+}
+
+function CustomDropdown({ trigger, children }: CustomDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isOpen])
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <div onClick={() => setIsOpen(!isOpen)}>
+        {trigger}
+      </div>
+      {isOpen && (
+        <div className="absolute right-0 top-10 w-56 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-lg z-50 py-1">
+          <div onClick={() => setIsOpen(false)}>
+            {children}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface DropdownItemProps {
+  onClick: () => void
+  children: React.ReactNode
+  className?: string
+}
+
+function DropdownItem({ onClick, children, className = '' }: DropdownItemProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 flex items-center transition-colors ${className}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function DropdownSeparator() {
+  return <div className="h-px bg-gray-200 dark:bg-gray-600 my-1" />
+}
+
+// Dark Mode Hook
+function useDarkMode() {
+  const [isDark, setIsDark] = useState(false)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+    // Check localStorage and system preference on mount
+    const savedTheme = localStorage.getItem('theme')
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    
+    const shouldBeDark = savedTheme === 'dark' || (!savedTheme && systemPrefersDark)
+    setIsDark(shouldBeDark)
+    
+    if (shouldBeDark) {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+  }, [])
+
+  const toggleDarkMode = () => {
+    if (!mounted) return
+    
+    const newIsDark = !isDark
+    setIsDark(newIsDark)
+    
+    if (newIsDark) {
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('theme', 'dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+      localStorage.setItem('theme', 'light')
+    }
+  }
+
+  return { isDark, toggleDarkMode, mounted }
+}
 
 export function Navbar() {
   const { user, signOut, loading } = useAuth()
   const router = useRouter()
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const pathname = usePathname()
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isClient, setIsClient] = useState(false)
+  const { isDark, toggleDarkMode, mounted } = useDarkMode()
 
   useEffect(() => {
     setIsClient(true)
   }, [])
+
+  // Navigation items for authenticated users
+  const navigationItems = [
+    {
+      name: 'Dashboard',
+      href: '/dashboard',
+      icon: LayoutDashboard,
+      description: 'Overview of your drops'
+    },
+    {
+      name: 'Analytics',
+      href: '/analytics',
+      icon: BarChart3,
+      description: 'View drop statistics'
+    },
+    {
+      name: 'Settings',
+      href: '/settings',
+      icon: Settings,
+      description: 'Account preferences'
+    }
+  ]
 
   const handleSignOut = async () => {
     try {
@@ -26,147 +218,292 @@ export function Navbar() {
     }
   }
 
+  // Close sidebar when route changes
+  useEffect(() => {
+    setIsSidebarOpen(false)
+  }, [pathname])
+
+  // Prevent body scroll when sidebar is open
+  useEffect(() => {
+    if (isSidebarOpen) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = 'unset'
+    }
+    
+    return () => {
+      document.body.style.overflow = 'unset'
+    }
+  }, [isSidebarOpen])
+
   // Don't render anything during SSR or initial hydration
-  if (!isClient) {
+  if (!isClient || !mounted) {
     return (
-      <nav className="sticky top-0 z-50 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="bg-white dark:bg-gray-900 fixed top-0 left-0 right-0 z-50 border-b border-gray-200 dark:border-gray-700">
+        <nav className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <Link href="/" className="flex items-center space-x-2">
-              <Shield className="w-8 h-8 text-primary" />
+            <div className="flex items-center space-x-2">
+              <Shield className="w-6 h-6 text-primary" />
               <span className="text-xl font-bold text-gray-900 dark:text-white">DropAccess</span>
-            </Link>
+            </div>
             <div className="flex items-center space-x-4">
               <div className="w-20 h-9 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
             </div>
           </div>
-        </div>
-      </nav>
+        </nav>
+      </div>
     )
   }
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          <Link href="/" className="flex items-center space-x-2">
-            <Shield className="w-8 h-8 text-primary" />
-            <span className="text-xl font-bold text-gray-900 dark:text-white">DropAccess</span>
-          </Link>
-
-          {/* Desktop Menu */}
-          <div className="hidden md:flex items-center space-x-6">
-            {!loading && user ? (
-              <>
-                <Link href="/dashboard" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-                  Dashboard
-                </Link>
-                <Link href="/drops/new">
-                  <Button size="sm" className="font-medium">
-                    <Plus className="w-4 h-4 mr-2" />
-                    New Drop
-                  </Button>
-                </Link>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">
-                    {user.email}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleSignOut}
-                    className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <div className="flex items-center space-x-4">
-                <Link href="/auth">
-                  <Button variant="ghost" className="font-medium">Sign In</Button>
-                </Link>
-                <Link href="/auth">
-                  <Button className="font-medium">Get Started</Button>
-                </Link>
-              </div>
-            )}
-          </div>
-
-          {/* Mobile Menu Button */}
-          <div className="md:hidden">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2"
-            >
-              {isMobileMenuOpen ? (
-                <X className="w-5 h-5" />
-              ) : (
-                <Menu className="w-5 h-5" />
+    <>
+      {/* Top Navigation Bar - Full Width */}
+      <div className="bg-white dark:bg-gray-900 fixed top-0 left-0 right-0 z-50 border-b border-gray-200 dark:border-gray-700">
+        <nav className="w-full px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            {/* Left section */}
+            <div className="flex items-center space-x-6">
+              {!loading && user && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsSidebarOpen(true)}
+                  className="lg:hidden"
+                >
+                  <Menu className="w-5 h-5" />
+                </Button>
               )}
-            </Button>
-          </div>
-        </div>
+              
+              <Link href={user ? "/dashboard" : "/"} className="flex items-center">
+                <Logo 
+                  variant={isDark ? 'dark' : 'light'} 
+                  size="md" 
+                  className="transition-transform hover:scale-105" 
+                />
+              </Link>
 
-        {/* Mobile Menu */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden border-t border-gray-200 dark:border-gray-800 py-4">
-            <div className="space-y-2">
+              {/* Desktop Navigation - Only show for authenticated users */}
+              {!loading && user && (
+                <div className="hidden lg:flex items-center space-x-1 ml-8">
+                  {navigationItems.map((item) => {
+                    const isActive = pathname === item.href
+                    return (
+                      <Link key={item.name} href={item.href}>
+                        <Button
+                          variant={isActive ? "secondary" : "ghost"}
+                          size="sm"
+                          className="flex items-center space-x-2"
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span>{item.name}</span>
+                        </Button>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right section */}
+            <div className="flex items-center space-x-3">
+              {/* Dark Mode Toggle */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleDarkMode}
+                className="w-9 h-9 p-0"
+              >
+                {isDark ? (
+                  <Sun className="w-4 h-4" />
+                ) : (
+                  <Moon className="w-4 h-4" />
+                )}
+              </Button>
+
               {!loading && user ? (
                 <>
-                  <Link 
-                    href="/dashboard" 
-                    className="block px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                    onClick={() => setIsMobileMenuOpen(false)}
+                  
+
+                  {/* Notifications - Desktop only */}
+                  <Button variant="ghost" size="sm" className="hidden md:flex w-9 h-9 p-0">
+                    <Bell className="w-4 h-4" />
+                  </Button>
+
+                  {/* User Menu */}
+                  <CustomDropdown
+                    trigger={
+                      <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-2">
+                        <div className="w-7 h-7 bg-primary/10 rounded-full flex items-center justify-center">
+                          <User className="w-4 h-4 text-primary" />
+                        </div>
+                        <span className="hidden md:inline text-sm font-medium max-w-24 truncate">
+                          {user.email?.split('@')[0]}
+                        </span>
+                      </Button>
+                    }
                   >
-                    Dashboard
-                  </Link>
-                  <Link 
-                    href="/drops/new"
-                    className="block px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    New Drop
-                  </Link>
-                  <div className="border-t border-gray-200 dark:border-gray-700 pt-2 mt-2">
-                    <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
-                      {user.email}
+                    <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-600">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
+                        {user.email?.split('@')[0]}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {user.email}
+                      </p>
                     </div>
-                    <button
-                      onClick={() => {
-                        handleSignOut()
-                        setIsMobileMenuOpen(false)
-                      }}
-                      className="block w-full text-left px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                    >
+                    <DropdownItem onClick={() => router.push('/dashboard')}>
+                      <LayoutDashboard className="w-4 h-4 mr-2" />
+                      Dashboard
+                    </DropdownItem>
+                    <DropdownItem onClick={() => router.push('/settings')}>
+                      <Settings className="w-4 h-4 mr-2" />
+                      Settings
+                    </DropdownItem>
+                    <DropdownItem onClick={() => router.push('/help')}>
+                      <HelpCircle className="w-4 h-4 mr-2" />
+                      Help & Support
+                    </DropdownItem>
+                    <DropdownSeparator />
+                    <DropdownItem onClick={handleSignOut} className="text-red-600 dark:text-red-400">
+                      <LogOut className="w-4 h-4 mr-2" />
                       Sign Out
-                    </button>
-                  </div>
+                    </DropdownItem>
+                  </CustomDropdown>
                 </>
               ) : (
-                <>
-                  <Link 
-                    href="/auth"
-                    className="block px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    Sign In
+                <div className="flex items-center space-x-3">
+                  <Link href="/auth">
+                    <Button variant="ghost" size="sm">
+                      Sign In
+                    </Button>
                   </Link>
-                  <Link 
-                    href="/auth"
-                    className="block px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    Get Started
+                  <Link href="/auth">
+                    <Button size="sm" className="font-medium">
+                      Get Started
+                    </Button>
                   </Link>
-                </>
+                </div>
               )}
             </div>
           </div>
-        )}
+        </nav>
       </div>
-    </nav>
+
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div 
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+          
+          {/* Sidebar */}
+          <div className="fixed left-0 top-0 h-full w-80 bg-white dark:bg-gray-900 shadow-xl transform transition-transform duration-200 ease-out">
+            {/* Sidebar Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <Logo 
+                variant={isDark ? 'dark' : 'light'} 
+                size="sm" 
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsSidebarOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </Button>
+            </div>
+
+            {/* User Info */}
+            {user && (
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
+                    <User className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-white">
+                      {user.email?.split('@')[0]}
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {user.email}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Create Drop Button - Mobile */}
+            {user && (
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <Link href="/drops/new" className="block">
+                  <Button className="w-full font-medium">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Create Drop
+                  </Button>
+                </Link>
+              </div>
+            )}
+
+            {/* Navigation Items */}
+            {user && (
+              <div className="p-4 space-y-2">
+                {navigationItems.map((item) => {
+                  const isActive = pathname === item.href
+                  return (
+                    <Link
+                      key={item.name}
+                      href={item.href}
+                      className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${
+                        isActive
+                          ? 'bg-primary/10 text-primary'
+                          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      <item.icon className="w-5 h-5" />
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {item.description}
+                        </p>
+                      </div>
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Sidebar Footer */}
+            <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
+              {/* Dark Mode Toggle */}
+              <button
+                onClick={toggleDarkMode}
+                className="flex items-center space-x-3 w-full p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                <span className="text-sm">{isDark ? 'Light Mode' : 'Dark Mode'}</span>
+              </button>
+              
+              <button
+                onClick={() => router.push('/help')}
+                className="flex items-center space-x-3 w-full p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                <HelpCircle className="w-4 h-4" />
+                <span className="text-sm">Help & Support</span>
+              </button>
+              
+              {user && (
+                <button
+                  onClick={handleSignOut}
+                  className="flex items-center space-x-3 w-full p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="text-sm">Sign Out</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
