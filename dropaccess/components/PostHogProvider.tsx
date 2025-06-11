@@ -31,16 +31,8 @@ function PostHogPageView(): null {
 
 function PostHogAuthProvider({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false)
-  
-  // Use a try-catch to handle cases where auth context might not be available
-  let user = null
-  try {
-    const auth = useAuth()
-    user = auth.user
-  } catch (error) {
-    // Auth context not available, which is fine during SSR or initial load
-    console.log('Auth context not available for PostHog, will retry when available')
-  }
+  const auth = useAuth() // Call useAuth unconditionally at the top level
+  const user = auth?.user || null // Handle cases where auth might be undefined
 
   useEffect(() => {
     setMounted(true)
