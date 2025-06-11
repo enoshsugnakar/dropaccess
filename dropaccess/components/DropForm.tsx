@@ -58,7 +58,7 @@ export function DropForm() {
   const router = useRouter();
   const { user } = useAuth();
   // Use the 'loading' property instead of 'isLoading' to avoid the TS error
-  const { planLimits, usage, loading: planLoading } = useSubscription();
+  const { planLimits, usage, isLoading: planLoading } = useSubscription();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});

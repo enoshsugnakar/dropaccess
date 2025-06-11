@@ -45,7 +45,7 @@ interface RemainingDrops {
   total: number
 }
 
-// Plan limits based on your pricing image
+// Plan limits based on your pricing structure
 const getPlanLimits = (planType: string): PlanLimits => {
   switch (planType) {
     case 'free':
@@ -63,18 +63,18 @@ const getPlanLimits = (planType: string): PlanLimits => {
         bulk_actions: false,
         custom_domain: false,
         detailed_analytics: false,
-        time_starts_after_verification: false
+        time_starts_after_verification: false // Free users can't use verification mode
       }
     
     case 'weekly':
       return {
         plan_name: 'weekly',
-        drops_per_week: 5,
-        drops_per_month: 20, // Roughly 5 per week
-        max_file_size_mb: 100,
-        max_recipients_per_drop: 20,
-        max_storage_gb: 2, // 2GB total storage
-        max_access_days: 7, // Custom time limit capped at 7 days
+        drops_per_week: 10,
+        drops_per_month: 40, // Roughly 10 per week
+        max_file_size_mb: 25,
+        max_recipients_per_drop: 10,
+        max_storage_gb: 1, // 1GB total storage
+        max_access_days: 7, // Up to 7 days access
         analytics_retention_days: 30,
         custom_branding: false,
         priority_support: false,
@@ -88,16 +88,16 @@ const getPlanLimits = (planType: string): PlanLimits => {
     case 'monthly':
       return {
         plan_name: 'monthly',
-        drops_per_month: 15,
-        max_file_size_mb: 300,
-        max_recipients_per_drop: 20,
+        drops_per_month: 50,
+        max_file_size_mb: 100,
+        max_recipients_per_drop: 25,
         max_storage_gb: 5, // 5GB total storage
-        max_access_days: 7, // Custom time limit capped at 7 days
+        max_access_days: 30, // Up to 30 days access
         analytics_retention_days: 90,
         custom_branding: false,
         priority_support: true,
         api_access: false,
-        bulk_actions: false,
+        bulk_actions: true,
         custom_domain: false,
         detailed_analytics: true,
         time_starts_after_verification: true
@@ -106,11 +106,11 @@ const getPlanLimits = (planType: string): PlanLimits => {
     case 'business':
       return {
         plan_name: 'business',
-        drops_per_month: undefined, // Unlimited
-        max_file_size_mb: 1024, // 1GB per file
-        max_recipients_per_drop: 500,
-        max_storage_gb: 50, // 50GB total storage
-        max_access_days: 30, // Custom time limit till 30 days
+        drops_per_month: 200,
+        max_file_size_mb: 500,
+        max_recipients_per_drop: 100,
+        max_storage_gb: 20, // 20GB total storage
+        max_access_days: 90, // Up to 90 days access
         analytics_retention_days: 365,
         custom_branding: true,
         priority_support: true,
@@ -122,12 +122,13 @@ const getPlanLimits = (planType: string): PlanLimits => {
       }
     
     default:
-      return getPlanLimits('free')
+      return getPlanLimits('free') // Default to free plan limits
   }
 }
 
 export function useSubscription() {
   const { user } = useAuth()
+  const [isLoading, setIsLoading] = useState(true)
   const [planLimits, setPlanLimits] = useState<PlanLimits | null>(null)
   const [usage, setUsage] = useState<UsageData>({
     dropsThisMonth: 0,
@@ -136,195 +137,151 @@ export function useSubscription() {
     recipientsThisMonth: 0
   })
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [currentPlan, setCurrentPlan] = useState<string>('free')
 
   useEffect(() => {
-    if (user) {
-      loadSubscriptionData()
+    if (!user) {
+      setPlanLimits(getPlanLimits('free'))
+      setIsLoading(false)
+      return
     }
+
+    fetchSubscriptionData()
   }, [user])
 
-  const loadSubscriptionData = async () => {
+  const fetchSubscriptionData = async () => {
+    if (!user) return
+
     try {
-      setLoading(true)
-
-      // Get user's current plan from database
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('is_paid')
-        .eq('id', user?.id)
-        .single()
-
-      if (userError) {
-        console.error('Error fetching user data:', userError)
-      }
-
-      // Get active subscription if exists
-      const { data: subscriptionData } = await supabase
+      // Fetch user's subscription
+      const { data: subData, error: subError } = await supabase
         .from('subscriptions')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
         .single()
 
-      // Determine current plan
-      let userPlan = 'free'
-      if (subscriptionData) {
-        userPlan = subscriptionData.plan
-        setSubscription(subscriptionData)
+      if (subError && subError.code !== 'PGRST116') {
+        console.error('Error fetching subscription:', subError)
       }
 
-      setCurrentPlan(userPlan)
-      const limits = getPlanLimits(userPlan)
-      setPlanLimits(limits)
+      const planType = subData?.plan || 'free'
+      setSubscription(subData)
+      setPlanLimits(getPlanLimits(planType))
 
-      // Calculate usage for current month
-      const startOfMonth = new Date()
-      startOfMonth.setDate(1)
-      startOfMonth.setHours(0, 0, 0, 0)
+      // Fetch usage data
+      await fetchUsageData()
+    } catch (error) {
+      console.error('Error in fetchSubscriptionData:', error)
+      setPlanLimits(getPlanLimits('free'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
-      // Calculate usage for current week
-      const startOfWeek = new Date()
-      const day = startOfWeek.getDay()
-      const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1)
-      startOfWeek.setDate(diff)
+  const fetchUsageData = async () => {
+    if (!user) return
+
+    try {
+      const now = new Date()
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+      const startOfWeek = new Date(now)
+      startOfWeek.setDate(now.getDate() - now.getDay())
       startOfWeek.setHours(0, 0, 0, 0)
 
-      // Get drops count for this month
-      const { count: dropsCountMonth } = await supabase
+      // Fetch drops created this month
+      const { data: monthlyDrops, error: monthlyError } = await supabase
         .from('drops')
-        .select('*', { count: 'exact', head: true })
-        .eq('owner_id', user?.id)
+        .select('id')
+        .eq('owner_id', user.id)
         .gte('created_at', startOfMonth.toISOString())
 
-      // Get drops count for this week
-      const { count: dropsCountWeek } = await supabase
+      if (monthlyError) throw monthlyError
+
+      // Fetch drops created this week
+      const { data: weeklyDrops, error: weeklyError } = await supabase
         .from('drops')
-        .select('*', { count: 'exact', head: true })
-        .eq('owner_id', user?.id)
+        .select('id')
+        .eq('owner_id', user.id)
         .gte('created_at', startOfWeek.toISOString())
 
-      // Get total recipients this month
-      const { data: recipientsData } = await supabase
-        .from('drops')
-        .select(`
-          drop_recipients(count)
-        `)
-        .eq('owner_id', user?.id)
-        .gte('created_at', startOfMonth.toISOString())
+      if (weeklyError) throw weeklyError
 
-      const totalRecipients = recipientsData?.reduce((sum, drop: any) => {
-        return sum + (drop.drop_recipients?.[0]?.count || 0)
-      }, 0) || 0
+      // Fetch total recipients this month
+      const { data: recipientData, error: recipientError } = await supabase
+        .from('drop_recipients')
+        .select('id, drops!inner(owner_id, created_at)')
+        .eq('drops.owner_id', user.id)
+        .gte('drops.created_at', startOfMonth.toISOString())
 
-      // Get storage usage (approximate)
-      const { data: filesData } = await supabase
+      if (recipientError) throw recipientError
+
+      // Calculate storage used (simplified - you might want to implement actual storage calculation)
+      const { data: storageData, error: storageError } = await supabase
         .from('drops')
         .select('file_path')
-        .eq('owner_id', user?.id)
-        .eq('drop_type', 'file')
+        .eq('owner_id', user.id)
         .not('file_path', 'is', null)
 
-      // Estimate storage (you'd want to get actual file sizes from storage)
-      const storageUsedMB = (filesData?.length || 0) * 10 // Rough estimate
+      if (storageError) throw storageError
 
       setUsage({
-        dropsThisMonth: dropsCountMonth || 0,
-        dropsThisWeek: dropsCountWeek || 0,
-        storageUsedMB,
-        recipientsThisMonth: totalRecipients
+        dropsThisMonth: monthlyDrops?.length || 0,
+        dropsThisWeek: weeklyDrops?.length || 0,
+        storageUsedMB: storageData?.length * 10 || 0, // Simplified calculation
+        recipientsThisMonth: recipientData?.length || 0
       })
-
     } catch (error) {
-      console.error('Error loading subscription data:', error)
-    } finally {
-      setLoading(false)
+      console.error('Error fetching usage data:', error)
     }
   }
 
-  const canCreateDrop = () => {
-    if (!planLimits) return false
-    
-    // Check based on plan type
-    if (currentPlan === 'weekly') {
-      return usage.dropsThisWeek < (planLimits.drops_per_week || 0)
-    } else if (currentPlan === 'business') {
-      return true // Unlimited
-    } else {
-      // Free and monthly plans
-      if (planLimits.drops_per_month === undefined) return true // Unlimited
-      return usage.dropsThisMonth < planLimits.drops_per_month
+  const getRemainingDrops = (): RemainingDrops => {
+    if (!planLimits) {
+      return { count: 0, period: 'month', total: 0 }
     }
-  }
 
-  const getRemainingDrops = (): RemainingDrops | null => {
-    if (!planLimits) return null
-    
-    if (currentPlan === 'weekly') {
-      const total = planLimits.drops_per_week || 0
-      const remaining = total - usage.dropsThisWeek
-      return { 
-        count: Math.max(0, remaining), 
+    if (planLimits.drops_per_week) {
+      return {
+        count: Math.max(0, planLimits.drops_per_week - usage.dropsThisWeek),
         period: 'week',
-        total
+        total: planLimits.drops_per_week
       }
-    } else if (currentPlan === 'business' || planLimits.drops_per_month === undefined) {
-      return null // Unlimited
-    } else {
-      const total = planLimits.drops_per_month
-      const remaining = total - usage.dropsThisMonth
-      return { 
-        count: Math.max(0, remaining), 
+    }
+
+    if (planLimits.drops_per_month) {
+      return {
+        count: Math.max(0, planLimits.drops_per_month - usage.dropsThisMonth),
         period: 'month',
-        total
+        total: planLimits.drops_per_month
       }
     }
+
+    return { count: 0, period: 'month', total: 0 }
   }
 
-  const getStoragePercentage = () => {
+  const canCreateDrop = (): boolean => {
+    const remaining = getRemainingDrops()
+    return remaining.count > 0
+  }
+
+  const getStorageUsedPercent = (): number => {
     if (!planLimits) return 0
-    const limitMB = planLimits.max_storage_gb * 1024
-    return Math.min(100, (usage.storageUsedMB / limitMB) * 100)
+    const maxStorageMB = planLimits.max_storage_gb * 1024
+    return Math.min(100, (usage.storageUsedMB / maxStorageMB) * 100)
   }
 
-  const isNearLimit = (percentage = 80) => {
-    if (!planLimits) return false
-    
-    if (currentPlan === 'weekly') {
-      if (!planLimits.drops_per_week) return false
-      const usagePercentage = (usage.dropsThisWeek / planLimits.drops_per_week) * 100
-      return usagePercentage >= percentage
-    } else if (currentPlan === 'business' || planLimits.drops_per_month === undefined) {
-      return false // Unlimited
-    } else {
-      const usagePercentage = (usage.dropsThisMonth / planLimits.drops_per_month) * 100
-      return usagePercentage >= percentage
-    }
-  }
-
-  const getPlanPrice = () => {
-    switch (currentPlan) {
-      case 'weekly': return '$2.99/week'
-      case 'monthly': return '$9.99/month'
-      case 'business': return '$19.99/month'
-      default: return 'Free'
-    }
+  const refreshUsage = async () => {
+    await fetchUsageData()
   }
 
   return {
     planLimits,
     usage,
     subscription,
-    loading,
-    currentPlan,
+    isLoading,
     canCreateDrop,
     getRemainingDrops,
-    getStoragePercentage,
-    isNearLimit,
-    getPlanPrice,
-    refreshData: loadSubscriptionData
+    getStorageUsedPercent,
+    refreshUsage
   }
 }
