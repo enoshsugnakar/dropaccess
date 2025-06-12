@@ -272,21 +272,22 @@ export function DropForm() {
         drop_type: formData.dropType,
         masked_url: formData.dropType === "url" ? formData.maskedUrl.trim() : null,
         description: formData.description.trim() || null,
+        one_time_access: false,
         is_active: true,
-        file_path: null,
       };
 
-      // Add timer-related fields based on mode
-      if (formData.timerMode === "verification") {
-        // Verification mode - use default_time_limit_hours, no expires_at
-        dropPayload.default_time_limit_hours = formData.defaultTimeLimitHours;
-        dropPayload.expires_at = null;
-      } else {
-        // Creation mode - use expires_at, no default_time_limit_hours
-        if (expiryDate) {
-          dropPayload.expires_at = expiryDate.toISOString();
-        }
+      // Set timer-specific fields
+      if (formData.timerMode === "creation") {
+        dropPayload.expires_at = expiryDate?.toISOString();
         dropPayload.default_time_limit_hours = null;
+      } else {
+        dropPayload.expires_at = null;
+        dropPayload.default_time_limit_hours = formData.defaultTimeLimitHours;
+      }
+
+      // Add verification deadline for "after verification" mode
+      if (formData.timerMode === "verification" && formData.verificationDeadline) {
+        dropPayload.global_expires_at = formData.verificationDeadline.toISOString();
       }
 
       console.log("Creating drop with payload:", dropPayload);
@@ -297,9 +298,13 @@ export function DropForm() {
         .select()
         .single();
 
-      if (dropError || !dropData) {
+      if (dropError) {
         console.error("Drop creation error:", dropError);
-        throw dropError ?? new Error("Failed to create drop");
+        throw dropError;
+      }
+
+      if (!dropData) {
+        throw new Error("Failed to create drop");
       }
 
       insertedDrop = dropData;
@@ -327,7 +332,7 @@ export function DropForm() {
         } catch (fileError) {
           console.error("File upload failed:", fileError);
           await supabase.from("drops").delete().eq("id", insertedDrop.id);
-          throw new Error(`File upload failed: {fileError.message}`);
+          throw new Error(`File upload failed: ${(fileError as Error).message || 'Unknown error'}`);
         }
       }
 
@@ -357,23 +362,57 @@ export function DropForm() {
         }
 
         console.log("Recipients added successfully");
-      }
 
-      // Send appropriate emails
-      if (formData.sendNotifications) {
-        if (formData.timerMode === "verification") {
-          console.log("Would send verification emails to:", recipientEmails);
+        // Send email notifications if enabled
+        if (formData.sendNotifications) {
+          try {
+            console.log("Sending email notifications to recipients...");
+            
+            const emailResponse = await fetch('/api/send-drop-notification', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                dropId: insertedDrop.id,
+                recipientEmails: recipientEmails,
+                dropData: insertedDrop,
+                creatorEmail: user.email || 'Unknown User'
+              }),
+            });
+
+            const emailResult = await emailResponse.json();
+            
+            if (!emailResponse.ok) {
+              console.error('Email API error:', emailResult);
+              // Don't throw here - drop creation was successful, just email failed
+              toast.error(`Drop created but failed to send ${emailResult.error ? 'some' : ''} notifications`);
+            } else {
+              console.log('Email notifications sent:', emailResult);
+              if (emailResult.results.failed > 0) {
+                toast.error(`Drop created! Sent ${emailResult.results.successful}/${recipientEmails.length} notifications successfully`);
+              } else {
+                toast.success(`Drop created! All ${emailResult.results.successful} notifications sent successfully`);
+              }
+            }
+          } catch (emailError) {
+            console.error('Error sending email notifications:', emailError);
+            // Don't throw here - drop creation was successful, just email failed
+            toast.error('Drop created but failed to send email notifications');
+          }
         } else {
-          console.log("Would send direct access emails to:", recipientEmails);
+          // No notifications requested
+          const successMessage = formData.timerMode === "verification" 
+            ? "Drop created! Share the link manually with recipients."
+            : "Drop created! Share the link manually with recipients.";
+          
+          toast.success(successMessage);
         }
+      } else {
+        // No recipients - just show success
+        toast.success("Drop created successfully!");
       }
 
-      const successMessage = formData.timerMode === "verification" 
-        ? "Drop created! Recipients will receive verification emails."
-        : "Drop created! Recipients can access immediately.";
-      
-      toast.success(successMessage);
-      
       // Reset form
       setFormData({
         name: "",
