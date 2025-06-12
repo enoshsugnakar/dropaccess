@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { supabaseAdmin } from '@/lib/supabaseClient'; // Changed to use admin client
 import dodoClient, { PRODUCT_CONFIG, PlanType } from '@/lib/dodoClient';
 import { captureEvent } from '@/lib/posthog';
 
 export async function GET(request: NextRequest) {
   try {
+    // Check if supabaseAdmin is available
+    if (!supabaseAdmin) {
+      return NextResponse.json(
+        { error: 'Database configuration error' },
+        { status: 500 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('userId');
 
@@ -15,8 +23,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get user's current subscription
-    const { data: subscription, error } = await supabase
+    // Get user's current subscription (using admin client to bypass RLS)
+    const { data: subscription, error } = await supabaseAdmin
       .from('subscriptions')
       .select('*')
       .eq('user_id', userId)
@@ -70,6 +78,14 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if supabaseAdmin is available
+    if (!supabaseAdmin) {
+      return NextResponse.json(
+        { error: 'Database configuration error' },
+        { status: 500 }
+      );
+    }
+
     const body = await request.json();
     const { action, userId, userEmail, newPlan } = body;
 
@@ -80,8 +96,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get current subscription
-    const { data: currentSubscription } = await supabase
+    // Get current subscription (using admin client)
+    const { data: currentSubscription } = await supabaseAdmin
       .from('subscriptions')
       .select('*')
       .eq('user_id', userId)
@@ -115,6 +131,13 @@ export async function POST(request: NextRequest) {
 }
 
 async function handlePlanChange(currentSubscription: any, newPlan: string, userId: string, userEmail: string) {
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Database configuration error' },
+      { status: 500 }
+    );
+  }
+
   if (!currentSubscription) {
     return NextResponse.json(
       { error: 'No active subscription found' },
@@ -138,12 +161,12 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
       {
         product_id: newPlanConfig.productId,
         quantity: 1,
-        proration_billing_mode: 'prorated_immediately' // Only valid value according to TypeScript definition
+        proration_billing_mode: 'prorated_immediately'
       }
     );
 
-    // Update local subscription record
-    await supabase
+    // Update local subscription record (using admin client)
+    await supabaseAdmin
       .from('subscriptions')
       .update({
         plan: newPlan,
@@ -153,8 +176,8 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
       })
       .eq('id', currentSubscription.id);
 
-    // Update user tier
-    await supabase
+    // Update user tier (using admin client)
+    await supabaseAdmin
       .from('users')
       .update({
         subscription_tier: newPlan,
@@ -198,6 +221,13 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
 }
 
 async function handleCancellation(currentSubscription: any, userId: string, userEmail: string) {
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Database configuration error' },
+      { status: 500 }
+    );
+  }
+
   if (!currentSubscription) {
     return NextResponse.json(
       { error: 'No active subscription found' },
@@ -207,7 +237,6 @@ async function handleCancellation(currentSubscription: any, userId: string, user
 
   try {
     // Update subscription status to cancelled using the update method
-    // Dodo doesn't have a separate cancel method, we update with cancel status
     const canceledSubscription = await dodoClient.subscriptions.update(
       currentSubscription.dodo_subscription_id,
       {
@@ -218,8 +247,8 @@ async function handleCancellation(currentSubscription: any, userId: string, user
       }
     );
 
-    // Update local subscription record
-    await supabase
+    // Update local subscription record (using admin client)
+    await supabaseAdmin
       .from('subscriptions')
       .update({
         cancel_at_period_end: true,
@@ -261,6 +290,13 @@ async function handleCancellation(currentSubscription: any, userId: string, user
 }
 
 async function handleReactivation(currentSubscription: any, userId: string, userEmail: string) {
+  if (!supabaseAdmin) {
+    return NextResponse.json(
+      { error: 'Database configuration error' },
+      { status: 500 }
+    );
+  }
+
   if (!currentSubscription) {
     return NextResponse.json(
       { error: 'No subscription found' },
@@ -281,8 +317,8 @@ async function handleReactivation(currentSubscription: any, userId: string, user
       }
     );
 
-    // Update local subscription record
-    await supabase
+    // Update local subscription record (using admin client)
+    await supabaseAdmin
       .from('subscriptions')
       .update({
         cancel_at_period_end: false,

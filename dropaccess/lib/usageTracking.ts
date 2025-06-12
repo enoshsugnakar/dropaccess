@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabaseClient';
+import { supabaseAdmin } from '@/lib/supabaseClient';
 
 // Subscription tier limits
 export const TIER_LIMITS = {
@@ -47,11 +47,15 @@ export function getCurrentMonthPeriod() {
 
 // Get user's current usage for the month
 export async function getCurrentUsage(userId: string) {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client not configured');
+  }
+
   const { period_start, period_end } = getCurrentMonthPeriod();
 
   try {
     // Get or create usage tracking record for current month
-    let { data: usage, error } = await supabase
+    let { data: usage, error } = await supabaseAdmin
       .from('usage_tracking')
       .select('*')
       .eq('user_id', userId)
@@ -61,7 +65,7 @@ export async function getCurrentUsage(userId: string) {
 
     if (error && error.code === 'PGRST116') {
       // No record found, create one
-      const { data: newUsage, error: createError } = await supabase
+      const { data: newUsage, error: createError } = await supabaseAdmin
         .from('usage_tracking')
         .insert({
           user_id: userId,
@@ -96,10 +100,14 @@ export async function updateUsageAfterDrop(
   recipientCount: number, 
   fileSizeMb: number = 0
 ) {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client not configured');
+  }
+
   try {
     const usage = await getCurrentUsage(userId);
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('usage_tracking')
       .update({
         drops_created: usage.drops_created + 1,
@@ -122,9 +130,13 @@ export async function updateUsageAfterDrop(
 
 // Check if user can create a drop based on their tier limits
 export async function canCreateDrop(userId: string, recipientCount: number, fileSizeMb: number = 0) {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client not configured');
+  }
+
   try {
     // Get user's tier
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('users')
       .select('subscription_tier')
       .eq('id', userId)
@@ -165,9 +177,13 @@ export async function canCreateDrop(userId: string, recipientCount: number, file
 
 // Get usage summary for dashboard
 export async function getUsageSummary(userId: string) {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client not configured');
+  }
+
   try {
     // Get user's tier
-    const { data: user, error: userError } = await supabase
+    const { data: user, error: userError } = await supabaseAdmin
       .from('users')
       .select('subscription_tier, subscription_status')
       .eq('id', userId)
@@ -204,11 +220,15 @@ export async function getUsageSummary(userId: string) {
 
 // Reset usage for new billing period (called by webhook)
 export async function resetUsageForNewPeriod(userId: string) {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase admin client not configured');
+  }
+
   const { period_start, period_end } = getCurrentMonthPeriod();
 
   try {
     // Create new usage record for the new period
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('usage_tracking')
       .insert({
         user_id: userId,
