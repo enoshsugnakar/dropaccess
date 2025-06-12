@@ -1,15 +1,15 @@
-'use client'
+"use client";
 
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { 
-  Shield, 
-  Clock, 
-  AlertCircle, 
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Shield,
+  Clock,
+  AlertCircle,
   Mail,
   Loader2,
   CheckCircle,
@@ -25,149 +25,201 @@ import {
   ChevronUp,
   Globe,
   FileText,
-  Hash
-} from 'lucide-react'
-import toast from 'react-hot-toast'
+  Hash,
+} from "lucide-react";
+import toast from "react-hot-toast";
+import { usePostHogAnalytics, usePageTimeTracking } from "@/components/PostHogProvider";
 
 interface DropData {
-  id: string
-  name: string
-  description?: string
-  drop_type: 'file' | 'url'
-  file_path?: string
-  masked_url?: string
-  expires_at?: string
-  default_time_limit_hours?: number
-  one_time_access: boolean
-  is_active: boolean
-  allow_download?: boolean
+  id: string;
+  name: string;
+  description?: string;
+  drop_type: "file" | "url";
+  file_path?: string;
+  masked_url?: string;
+  expires_at?: string;
+  default_time_limit_hours?: number;
+  one_time_access: boolean;
+  is_active: boolean;
+  allow_download?: boolean;
 }
 
 interface VerificationSession {
-  dropId: string
-  email: string
-  verifiedAt: number
-  expiresAt: number
-  accessExpiresAt?: number
-  contentUrl?: string
-  contentType?: string
-  dropData?: DropData
-  pdfPages?: PDFPageData[]
+  dropId: string;
+  email: string;
+  verifiedAt: number;
+  expiresAt: number;
+  accessExpiresAt?: number;
+  contentUrl?: string;
+  contentType?: string;
+  dropData?: DropData;
+  pdfPages?: PDFPageData[];
 }
 
 interface PDFLink {
-  url: string
-  text: string
-  rect: [number, number, number, number]
-  pageIndex: number
-  type: 'external' | 'internal' | 'email' | 'other'
+  url: string;
+  text: string;
+  rect: [number, number, number, number];
+  pageIndex: number;
+  type: "external" | "internal" | "email" | "other";
 }
 
 interface PDFPageData {
-  imageUrl: string
-  links: PDFLink[]
-  width: number
-  height: number
-  scale: number
+  imageUrl: string;
+  links: PDFLink[];
+  width: number;
+  height: number;
+  scale: number;
 }
 
-type ViewMode = 'loading' | 'verification' | 'content' | 'error'
+type ViewMode = "loading" | "verification" | "content" | "error";
 
-const SESSION_DURATION = 30 * 60 * 1000 // 30 minutes
-const SESSION_STORAGE_KEY = 'dropaccess_verification'
-const PDF_CACHE_KEY = 'dropaccess_pdf_cache'
+const SESSION_DURATION = 30 * 60 * 1000; // 30 minutes
+const SESSION_STORAGE_KEY = "dropaccess_verification";
+const PDF_CACHE_KEY = "dropaccess_pdf_cache";
 
 export default function DropAccessPage() {
-  const params = useParams()
-  const router = useRouter()
-  const dropId = params.id as string
+  const params = useParams();
+  const router = useRouter();
+  const dropId = params.id as string;
+
+  // PostHog analytics integration
+  const {
+    trackEvent,
+    trackDropAccessed,
+    trackError,
+    trackPerformance,
+    trackFeatureUsed,
+    trackButtonClick,
+  } = usePostHogAnalytics();
+
+  // Track page time
+  usePageTimeTracking("drop_access_page");
 
   // State management
-  const [viewMode, setViewMode] = useState<ViewMode>('loading')
-  const [dropData, setDropData] = useState<DropData | undefined>(undefined)
-  const [error, setError] = useState('')
-  const [email, setEmail] = useState('')
-  const [verifying, setVerifying] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [contentUrl, setContentUrl] = useState<string | undefined>(undefined)
-  const [contentType, setContentType] = useState<string>('')
-  const [timeRemaining, setTimeRemaining] = useState<string>('')
-  const [personalExpiresAt, setPersonalExpiresAt] = useState<Date | undefined>(undefined)
-  const [showHeader, setShowHeader] = useState(true)
+  const [viewMode, setViewMode] = useState<ViewMode>("loading");
+  const [dropData, setDropData] = useState<DropData | undefined>(undefined);
+  const [error, setError] = useState("");
+  const [email, setEmail] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [contentUrl, setContentUrl] = useState<string | undefined>(undefined);
+  const [contentType, setContentType] = useState<string>("");
+  const [timeRemaining, setTimeRemaining] = useState<string>("");
+  const [personalExpiresAt, setPersonalExpiresAt] = useState<Date | undefined>(undefined);
+  const [showHeader, setShowHeader] = useState(true);
 
   // PDF specific state
-  const [pdfLoaded, setPdfLoaded] = useState(false)
-  const [pdfError, setPdfError] = useState('')
-  const [pdfPages, setPdfPages] = useState<PDFPageData[]>([])
-  const [totalPages, setTotalPages] = useState(0)
-  const [loadingProgress, setLoadingProgress] = useState(0)
+  const [pdfLoaded, setPdfLoaded] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const [pdfPages, setPdfPages] = useState<PDFPageData[]>([]);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loadingProgress, setLoadingProgress] = useState(0);
 
   // Links dropdown state
-  const [showLinksDropdown, setShowLinksDropdown] = useState(false)
-  const [allLinks, setAllLinks] = useState<PDFLink[]>([])
+  const [showLinksDropdown, setShowLinksDropdown] = useState(false);
+  const [allLinks, setAllLinks] = useState<PDFLink[]>([]);
+
+  // Track initial page load and drop access attempt
+  useEffect(() => {
+    if (dropId) {
+      trackEvent("drop_access_initiated", {
+        drop_id: dropId,
+        user_agent: navigator.userAgent,
+        referrer: document.referrer || "direct",
+      });
+    }
+  }, [dropId, trackEvent]);
+
+  // Track view mode changes
+  useEffect(() => {
+    if (viewMode && dropId) {
+      trackEvent("drop_view_mode_changed", {
+        drop_id: dropId,
+        view_mode: viewMode,
+        has_content_url: !!contentUrl,
+        content_type: contentType || undefined,
+      });
+    }
+  }, [viewMode, dropId, contentUrl, contentType, trackEvent]);
 
   // Debug logging
   useEffect(() => {
-    console.log('Current state:', {
+    console.log("Current state:", {
       viewMode,
       dropData: !!dropData,
       contentUrl: !!contentUrl,
       contentType,
       pdfLoaded,
-      email
-    })
-  }, [viewMode, dropData, contentUrl, contentType, pdfLoaded, email])
+      email,
+    });
+  }, [viewMode, dropData, contentUrl, contentType, pdfLoaded, email]);
 
   // Enhanced security
   useEffect(() => {
     const preventContext = (e: Event) => {
       // Allow dropdown interactions
-      const target = e.target as HTMLElement
-      if (target?.closest('.pdf-links-dropdown') || target?.closest('.pdf-links-trigger')) {
-        return
+      const target = e.target as HTMLElement;
+      if (target?.closest(".pdf-links-dropdown") || target?.closest(".pdf-links-trigger")) {
+        return;
       }
-      e.preventDefault()
-      e.stopPropagation()
-      e.stopImmediatePropagation()
-      return false
-    }
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
 
     const preventKeys = (e: KeyboardEvent) => {
       if (
-        e.key === 'F12' ||
+        e.key === "F12" ||
         e.keyCode === 123 ||
         (e.ctrlKey && e.shiftKey && [73, 74, 67].includes(e.keyCode)) ||
         (e.ctrlKey && [85, 83, 65, 67, 80, 83, 80].includes(e.keyCode)) ||
         (e.metaKey && [85, 83, 65, 67, 80, 83, 80].includes(e.keyCode)) ||
-        (e.ctrlKey && e.key === 'p') ||
-        (e.metaKey && e.key === 'p')
+        (e.ctrlKey && e.key === "p") ||
+        (e.metaKey && e.key === "p")
       ) {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        return false
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        // Track security bypass attempts
+        trackEvent("security_bypass_attempt", {
+          drop_id: dropId,
+          key_combination: e.key,
+          ctrl_key: e.ctrlKey,
+          shift_key: e.shiftKey,
+          meta_key: e.metaKey,
+        });
+
+        return false;
       }
-    }
+    };
 
     const preventSelection = (e: Event) => {
-      if (viewMode === 'content') {
+      if (viewMode === "content") {
         // Allow selection on dropdown
-        const target = e.target as HTMLElement
-        if (target?.closest('.pdf-links-dropdown') || target?.closest('.pdf-links-trigger')) {
-          return
+        const target = e.target as HTMLElement;
+        if (target?.closest(".pdf-links-dropdown") || target?.closest(".pdf-links-trigger")) {
+          return;
         }
-        e.preventDefault()
-        e.stopPropagation()
-        return false
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
       }
-    }
+    };
 
     const preventPrint = () => {
-      return false
-    }
+      // Track print attempt
+      trackEvent("print_attempt_blocked", {
+        drop_id: dropId,
+        content_type: contentType,
+      });
+      return false;
+    };
 
     // Security CSS
-    const style = document.createElement('style')
+    const style = document.createElement("style");
     style.innerHTML = `
       * {
         -webkit-user-select: none !important;
@@ -228,60 +280,60 @@ export default function DropAccessPage() {
           display: none !important; 
         }
       }
-    `
-    document.head.appendChild(style)
+    `;
+    document.head.appendChild(style);
 
     // Disable print
-    window.addEventListener('beforeprint', preventPrint)
-    window.addEventListener('afterprint', preventPrint)
+    window.addEventListener("beforeprint", preventPrint);
+    window.addEventListener("afterprint", preventPrint);
 
     // Event listeners
-    document.addEventListener('contextmenu', preventContext, { capture: true, passive: false })
-    document.addEventListener('keydown', preventKeys, { capture: true, passive: false })
-    document.addEventListener('selectstart', preventSelection, { capture: true, passive: false })
-    document.addEventListener('dragstart', preventSelection, { capture: true, passive: false })
-    document.addEventListener('copy', preventSelection, { capture: true, passive: false })
-    document.addEventListener('cut', preventSelection, { capture: true, passive: false })
-    document.addEventListener('paste', preventSelection, { capture: true, passive: false })
-    
-    window.addEventListener('contextmenu', preventContext, { capture: true, passive: false })
-    window.addEventListener('keydown', preventKeys, { capture: true, passive: false })
+    document.addEventListener("contextmenu", preventContext, { capture: true, passive: false });
+    document.addEventListener("keydown", preventKeys, { capture: true, passive: false });
+    document.addEventListener("selectstart", preventSelection, { capture: true, passive: false });
+    document.addEventListener("dragstart", preventSelection, { capture: true, passive: false });
+    document.addEventListener("copy", preventSelection, { capture: true, passive: false });
+    document.addEventListener("cut", preventSelection, { capture: true, passive: false });
+    document.addEventListener("paste", preventSelection, { capture: true, passive: false });
+
+    window.addEventListener("contextmenu", preventContext, { capture: true, passive: false });
+    window.addEventListener("keydown", preventKeys, { capture: true, passive: false });
 
     return () => {
-      document.removeEventListener('contextmenu', preventContext, { capture: true })
-      document.removeEventListener('keydown', preventKeys, { capture: true })
-      document.removeEventListener('selectstart', preventSelection, { capture: true })
-      document.removeEventListener('dragstart', preventSelection, { capture: true })
-      document.removeEventListener('copy', preventSelection, { capture: true })
-      document.removeEventListener('cut', preventSelection, { capture: true })
-      document.removeEventListener('paste', preventSelection, { capture: true })
-      
-      window.removeEventListener('beforeprint', preventPrint)
-      window.removeEventListener('afterprint', preventPrint)
-      
-      window.removeEventListener('contextmenu', preventContext, { capture: true })
-      window.removeEventListener('keydown', preventKeys, { capture: true })
-      
+      document.removeEventListener("contextmenu", preventContext, { capture: true });
+      document.removeEventListener("keydown", preventKeys, { capture: true });
+      document.removeEventListener("selectstart", preventSelection, { capture: true });
+      document.removeEventListener("dragstart", preventSelection, { capture: true });
+      document.removeEventListener("copy", preventSelection, { capture: true });
+      document.removeEventListener("cut", preventSelection, { capture: true });
+      document.removeEventListener("paste", preventSelection, { capture: true });
+
+      window.removeEventListener("beforeprint", preventPrint);
+      window.removeEventListener("afterprint", preventPrint);
+
+      window.removeEventListener("contextmenu", preventContext, { capture: true });
+      window.removeEventListener("keydown", preventKeys, { capture: true });
+
       if (style.parentNode) {
-        style.parentNode.removeChild(style)
+        style.parentNode.removeChild(style);
       }
-    }
-  }, [viewMode])
+    };
+  }, [viewMode, dropId, contentType, trackEvent]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-      if (!target?.closest('.pdf-links-dropdown') && !target?.closest('.pdf-links-trigger')) {
-        setShowLinksDropdown(false)
+      const target = event.target as HTMLElement;
+      if (!target?.closest(".pdf-links-dropdown") && !target?.closest(".pdf-links-trigger")) {
+        setShowLinksDropdown(false);
       }
-    }
+    };
 
     if (showLinksDropdown) {
-      document.addEventListener('click', handleClickOutside)
-      return () => document.removeEventListener('click', handleClickOutside)
+      document.addEventListener("click", handleClickOutside);
+      return () => document.removeEventListener("click", handleClickOutside);
     }
-  }, [showLinksDropdown])
+  }, [showLinksDropdown]);
 
   // PDF Cache Management
   const savePdfToCache = (url: string, pages: PDFPageData[]) => {
@@ -290,168 +342,380 @@ export default function DropAccessPage() {
         url,
         pages,
         timestamp: Date.now(),
-        expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-      }
-      localStorage.setItem(`${PDF_CACHE_KEY}_${dropId}`, JSON.stringify(cacheData))
-      console.log('PDF pages cached successfully')
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+      };
+      localStorage.setItem(`${PDF_CACHE_KEY}_${dropId}`, JSON.stringify(cacheData));
+      console.log("PDF pages cached successfully");
+
+      // Track cache save
+      trackEvent("pdf_cached", {
+        drop_id: dropId,
+        page_count: pages.length,
+        cache_size_kb: Math.round(JSON.stringify(cacheData).length / 1024),
+      });
     } catch (error) {
-      console.error('Failed to cache PDF:', error)
+      console.error("Failed to cache PDF:", error);
+      trackError(
+        "pdf_cache_save_failed",
+        error instanceof Error ? error.message : "Unknown error",
+        {
+          drop_id: dropId,
+        }
+      );
     }
-  }
+  };
 
   const loadPdfFromCache = (url: string): PDFPageData[] | null => {
     try {
-      const cached = localStorage.getItem(`${PDF_CACHE_KEY}_${dropId}`)
-      if (!cached) return null
+      const cached = localStorage.getItem(`${PDF_CACHE_KEY}_${dropId}`);
+      if (!cached) return null;
 
-      const cacheData = JSON.parse(cached)
-      
+      const cacheData = JSON.parse(cached);
+
       if (cacheData.expiresAt < Date.now() || cacheData.url !== url) {
-        localStorage.removeItem(`${PDF_CACHE_KEY}_${dropId}`)
-        return null
+        localStorage.removeItem(`${PDF_CACHE_KEY}_${dropId}`);
+        return null;
       }
 
-      console.log('PDF loaded from cache')
-      return cacheData.pages
+      console.log("PDF loaded from cache");
+
+      // Track cache hit
+      trackEvent("pdf_cache_hit", {
+        drop_id: dropId,
+        page_count: cacheData.pages.length,
+        cache_age_hours: Math.round((Date.now() - cacheData.timestamp) / (1000 * 60 * 60)),
+      });
+
+      return cacheData.pages;
     } catch (error) {
-      console.error('Failed to load PDF from cache:', error)
-      return null
+      console.error("Failed to load PDF from cache:", error);
+      trackError(
+        "pdf_cache_load_failed",
+        error instanceof Error ? error.message : "Unknown error",
+        {
+          drop_id: dropId,
+        }
+      );
+      return null;
     }
-  }
+  };
 
   const clearPdfCache = () => {
     try {
-      localStorage.removeItem(`${PDF_CACHE_KEY}_${dropId}`)
+      localStorage.removeItem(`${PDF_CACHE_KEY}_${dropId}`);
     } catch (error) {
-      console.error('Failed to clear PDF cache:', error)
+      console.error("Failed to clear PDF cache:", error);
     }
-  }
+  };
 
-  /// Session validation
-const isValidSession = (session: VerificationSession): boolean => {
-  try {
-    return (
-      session.dropId === dropId &&
-      !!session.email &&
-      session.expiresAt > Date.now() &&
-      (!session.accessExpiresAt || session.accessExpiresAt > Date.now()) &&
-      !!session.dropData &&
-      !!session.contentUrl &&
-      !!session.contentType
-    )
-  } catch {
-    return false
-  }
-}
+  // Session validation
+  const isValidSession = (session: VerificationSession): boolean => {
+    try {
+      return (
+        session.dropId === dropId &&
+        !!session.email &&
+        session.expiresAt > Date.now() &&
+        (!session.accessExpiresAt || session.accessExpiresAt > Date.now()) &&
+        !!session.dropData &&
+        !!session.contentUrl &&
+        !!session.contentType
+      );
+    } catch {
+      return false;
+    }
+  };
 
   // Determine link type
-  const getLinkType = (url: string): 'external' | 'internal' | 'email' | 'other' => {
+  const getLinkType = (url: string): "external" | "internal" | "email" | "other" => {
     try {
-      if (url.startsWith('mailto:')) return 'email'
-      if (url.startsWith('#')) return 'internal'
-      if (url.startsWith('http://') || url.startsWith('https://')) return 'external'
-      return 'other'
+      if (url.startsWith("mailto:")) return "email";
+      if (url.startsWith("#")) return "internal";
+      if (url.startsWith("http://") || url.startsWith("https://")) return "external";
+      return "other";
     } catch {
-      return 'other'
+      return "other";
     }
-  }
+  };
 
   // Get link icon
-  const getLinkIcon = (type: 'external' | 'internal' | 'email' | 'other') => {
+  const getLinkIcon = (type: "external" | "internal" | "email" | "other") => {
     switch (type) {
-      case 'external':
-        return <Globe className="w-3 h-3" />
-      case 'internal':
-        return <Hash className="w-3 h-3" />
-      case 'email':
-        return <Mail className="w-3 h-3" />
+      case "external":
+        return <Globe className="w-3 h-3" />;
+      case "internal":
+        return <Hash className="w-3 h-3" />;
+      case "email":
+        return <Mail className="w-3 h-3" />;
       default:
-        return <FileText className="w-3 h-3" />
+        return <FileText className="w-3 h-3" />;
     }
-  }
+  };
 
   // Truncate text smartly
   const truncateText = (text: string, maxLength: number = 25): string => {
-    if (text.length <= maxLength) return text
-    
+    if (text.length <= maxLength) return text;
+
     // Try to break at word boundary
-    const truncated = text.substring(0, maxLength)
-    const lastSpace = truncated.lastIndexOf(' ')
-    
+    const truncated = text.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(" ");
+
     if (lastSpace > maxLength * 0.7) {
-      return truncated.substring(0, lastSpace) + '...'
+      return truncated.substring(0, lastSpace) + "...";
     }
-    
-    return truncated + '...'
-  }
+
+    return truncated + "...";
+  };
 
   // Extract text content from PDF for links
   const extractLinkText = async (page: any, annotation: any): Promise<string> => {
     try {
       // Get text content from the page
-      const textContent = await page.getTextContent()
-      const rect = annotation.rect
-      
+      const textContent = await page.getTextContent();
+      const rect = annotation.rect;
+
       // Find text items that overlap with the link rectangle
-      const linkTexts: string[] = []
-      
+      const linkTexts: string[] = [];
+
       textContent.items.forEach((item: any) => {
         if (item.transform && item.str) {
           // Calculate item position
-          const itemX = item.transform[4]
-          const itemY = item.transform[5]
-          
+          const itemX = item.transform[4];
+          const itemY = item.transform[5];
+
           // Check if text item is within link bounds (with some tolerance)
-          const tolerance = 5
+          const tolerance = 5;
           if (
             itemX >= rect[0] - tolerance &&
             itemX <= rect[2] + tolerance &&
             itemY >= rect[1] - tolerance &&
             itemY <= rect[3] + tolerance
           ) {
-            linkTexts.push(item.str.trim())
+            linkTexts.push(item.str.trim());
           }
         }
-      })
-      
+      });
+
       // Combine found texts or fallback to URL
-      const combinedText = linkTexts.join(' ').trim()
-      return combinedText || annotation.url || 'Unknown Link'
-      
+      const combinedText = linkTexts.join(" ").trim();
+      return combinedText || annotation.url || "Unknown Link";
     } catch (error) {
-      console.error('Error extracting link text:', error)
+      console.error("Error extracting link text:", error);
       // Fallback: use URL as text
-      return annotation.url || 'Unknown Link'
+      return annotation.url || "Unknown Link";
     }
-  }
+  };
 
   // Convert PDF to images with enhanced link extraction
-  const convertPdfToImages = useCallback(async (url: string, forceReload = false) => {
-    setPdfError('')
-    setPdfLoaded(false)
-    setLoadingProgress(0)
-    setAllLinks([])
+  const convertPdfToImages = useCallback(
+    async (url: string, forceReload = false) => {
+      const startTime = Date.now();
+      setPdfError("");
+      setPdfLoaded(false);
+      setLoadingProgress(0);
+      setAllLinks([]);
 
-    // Try to load from cache first
-    if (!forceReload) {
-      const cachedPages = loadPdfFromCache(url)
-      if (cachedPages) {
-        setPdfPages(cachedPages)
-        setTotalPages(cachedPages.length)
-        setPdfLoaded(true)
-        setLoadingProgress(100)
-        
-        // Extract all links from cached pages
-        const links: PDFLink[] = []
-        cachedPages.forEach(page => {
-          links.push(...page.links)
-        })
-        setAllLinks(links)
-        
-        // Update session with cached PDF data if we're in content mode
-        if (viewMode === 'content') {
+      // Track PDF conversion start
+      trackEvent("pdf_conversion_started", {
+        drop_id: dropId,
+        force_reload: forceReload,
+        url_length: url.length,
+      });
+
+      // Try to load from cache first
+      if (!forceReload) {
+        const cachedPages = loadPdfFromCache(url);
+        if (cachedPages) {
+          setPdfPages(cachedPages);
+          setTotalPages(cachedPages.length);
+          setPdfLoaded(true);
+          setLoadingProgress(100);
+
+          // Extract all links from cached pages
+          const links: PDFLink[] = [];
+          cachedPages.forEach((page) => {
+            links.push(...page.links);
+          });
+          setAllLinks(links);
+
+          // Update session with cached PDF data if we're in content mode
+          if (viewMode === "content") {
+            setTimeout(() => {
+              const currentSession = getValidSession();
+              if (currentSession) {
+                saveVerificationSession(
+                  currentSession.email,
+                  personalExpiresAt,
+                  contentUrl,
+                  contentType,
+                  dropData,
+                  cachedPages
+                );
+                console.log("Session updated with cached PDF data");
+              }
+            }, 500);
+          }
+
+          // Track successful cache load
+          const loadTime = Date.now() - startTime;
+          trackPerformance("pdf_cache_load_time", loadTime, "milliseconds");
+
+          return;
+        }
+      }
+
+      try {
+        console.log("Converting PDF to images with enhanced link extraction for URL:", url);
+
+        // Load PDF.js if not already loaded
+        if (!(window as any).pdfjsLib) {
+          console.log("Loading PDF.js library...");
+
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            script.onload = () => {
+              (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc =
+                "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+              console.log("PDF.js library loaded successfully");
+              resolve();
+            };
+            script.onerror = () => {
+              console.error("Failed to load PDF.js");
+              reject(new Error("Failed to load PDF.js library"));
+            };
+            document.head.appendChild(script);
+          });
+        }
+
+        // Fetch PDF
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        console.log("PDF data received, size:", arrayBuffer.byteLength);
+
+        // Track PDF file info
+        trackEvent("pdf_file_loaded", {
+          drop_id: dropId,
+          file_size_mb: Math.round((arrayBuffer.byteLength / (1024 * 1024)) * 100) / 100,
+        });
+
+        // Load PDF document
+        const pdf = await (window as any).pdfjsLib
+          .getDocument({
+            data: arrayBuffer,
+            verbosity: 0,
+          })
+          .promise;
+
+        console.log("PDF loaded successfully. Pages:", pdf.numPages);
+        setTotalPages(pdf.numPages);
+
+        const pages: PDFPageData[] = [];
+        const allExtractedLinks: PDFLink[] = [];
+
+        // Convert each page to image and extract links with text
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          console.log(`Processing page ${pageNum}/${pdf.numPages}`);
+
+          try {
+            const page = await pdf.getPage(pageNum);
+
+            // Create canvas for rendering
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+
+            if (!context) {
+              console.error(`Failed to get canvas context for page ${pageNum}`);
+              continue;
+            }
+
+            // Calculate scale for high quality
+            const scale = 2.0;
+            const viewport = page.getViewport({ scale });
+
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            // Render page to canvas
+            await page
+              .render({
+                canvasContext: context,
+                viewport: viewport,
+              })
+              .promise;
+
+            // Convert canvas to image
+            const imageDataUrl = canvas.toDataURL("image/png", 0.95);
+
+            // Extract link annotations with text
+            const annotations = await page.getAnnotations();
+            const links: PDFLink[] = [];
+
+            for (const annotation of annotations) {
+              if (annotation.subtype === "Link" && annotation.url) {
+                try {
+                  // Extract the actual link text
+                  const linkText = await extractLinkText(page, annotation);
+
+                  const rect = annotation.rect;
+                  const viewportRect = viewport.convertToViewportRectangle(rect);
+
+                  const link: PDFLink = {
+                    url: annotation.url,
+                    text: linkText,
+                    rect: viewportRect as [number, number, number, number],
+                    pageIndex: pageNum - 1,
+                    type: getLinkType(annotation.url),
+                  };
+
+                  links.push(link);
+                  allExtractedLinks.push(link);
+
+                  console.log(
+                    `Found link on page ${pageNum}: "${linkText}" -> ${annotation.url}`
+                  );
+                } catch (linkError) {
+                  console.error(`Error processing link on page ${pageNum}:`, linkError);
+                }
+              }
+            }
+
+            pages.push({
+              imageUrl: imageDataUrl,
+              links: links,
+              width: viewport.width,
+              height: viewport.height,
+              scale: scale,
+            });
+
+            // Update progress
+            setLoadingProgress(Math.round((pageNum / pdf.numPages) * 100));
+
+            console.log(`Page ${pageNum} processed successfully with ${links.length} links`);
+          } catch (pageError) {
+            console.error(`Error processing page ${pageNum}:`, pageError);
+            // Continue with other pages
+          }
+        }
+
+        if (pages.length === 0) {
+          throw new Error("Failed to process any pages");
+        }
+
+        // Save to cache
+        savePdfToCache(url, pages);
+
+        setPdfPages(pages);
+        setAllLinks(allExtractedLinks);
+        setPdfLoaded(true);
+
+        // Update session with PDF data if we're in content mode
+        if (viewMode === "content") {
           setTimeout(() => {
-            const currentSession = getValidSession()
+            const currentSession = getValidSession();
             if (currentSession) {
               saveVerificationSession(
                 currentSession.email,
@@ -459,275 +723,205 @@ const isValidSession = (session: VerificationSession): boolean => {
                 contentUrl,
                 contentType,
                 dropData,
-                cachedPages
-              )
-              console.log('Session updated with cached PDF data')
+                pages // Save the newly converted pages
+              );
+              console.log("Session updated with PDF data");
             }
-          }, 500)
+          }, 500);
         }
-        return
+
+        console.log(
+          `Successfully processed ${pages.length} pages with ${allExtractedLinks.length} total links`
+        );
+
+        // Track successful conversion
+        const conversionTime = Date.now() - startTime;
+        trackEvent("pdf_conversion_completed", {
+          drop_id: dropId,
+          page_count: pages.length,
+          link_count: allExtractedLinks.length,
+          conversion_time_ms: conversionTime,
+          from_cache: false,
+        });
+
+        trackPerformance("pdf_conversion_time", conversionTime, "milliseconds");
+      } catch (error) {
+        console.error("Error converting PDF to images:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+        setPdfError(`Failed to load PDF: ${errorMessage}`);
+
+        // Track conversion error
+        trackError("pdf_conversion_failed", errorMessage, {
+          drop_id: dropId,
+          force_reload: forceReload,
+        });
       }
-    }
+    },
+    [
+      dropId,
+      viewMode,
+      personalExpiresAt,
+      contentUrl,
+      contentType,
+      dropData,
+      trackEvent,
+      trackError,
+      trackPerformance,
+    ]
+  );
+
+  // Handle link clicks with analytics
+  const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
 
     try {
-      console.log('Converting PDF to images with enhanced link extraction for URL:', url)
+      console.log(
+        `PDF link clicked: "${link.text}" -> ${link.url} (Page ${link.pageIndex + 1})`
+      );
 
-      // Load PDF.js if not already loaded
-      if (!(window as any).pdfjsLib) {
-        console.log('Loading PDF.js library...')
-        
-        await new Promise<void>((resolve, reject) => {
-          const script = document.createElement('script')
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-          script.onload = () => {
-            ;(window as any).pdfjsLib.GlobalWorkerOptions.workerSrc = 
-              'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-            console.log('PDF.js library loaded successfully')
-            resolve()
-          }
-          script.onerror = () => {
-            console.error('Failed to load PDF.js')
-            reject(new Error('Failed to load PDF.js library'))
-          }
-          document.head.appendChild(script)
-        })
+      // Track link click
+      trackEvent("pdf_link_clicked", {
+        drop_id: dropId,
+        link_url: link.url,
+        link_text: link.text,
+        link_type: link.type,
+        page_number: link.pageIndex + 1,
+        total_pages: totalPages,
+      });
+
+      let finalUrl = link.url.trim();
+
+      // Handle different URL formats
+      if (finalUrl.startsWith("mailto:")) {
+        // Email links - use as-is
+        window.location.href = finalUrl;
+        toast.success(`Opening email: ${truncateText(link.text, 20)}`);
+        setShowLinksDropdown(false);
+
+        trackEvent("pdf_email_link_opened", {
+          drop_id: dropId,
+          email: finalUrl,
+        });
+        return;
+      } else if (finalUrl.startsWith("http://") || finalUrl.startsWith("https://")) {
+        // Already has protocol - use as-is
+        // finalUrl is already correct
+      } else if (finalUrl.startsWith("www.")) {
+        // Add https to www links
+        finalUrl = `https://${finalUrl}`;
+      } else if (finalUrl.includes(".") && !finalUrl.startsWith("#")) {
+        // Looks like a domain - add https
+        finalUrl = `https://${finalUrl}`;
+      } else {
+        // Internal link or other format
+        console.warn("Unhandled link format:", finalUrl);
+        toast.error("Unsupported link format");
+
+        trackEvent("pdf_link_unsupported_format", {
+          drop_id: dropId,
+          original_url: link.url,
+          link_type: link.type,
+        });
+        return;
       }
 
-      // Fetch PDF
-      const response = await fetch(url)
-      if (!response.ok) {
-        throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`)
+      // Validate the final URL
+      try {
+        new URL(finalUrl);
+      } catch (urlError) {
+        console.error("Invalid URL after processing:", finalUrl);
+        toast.error("Invalid link detected");
+
+        trackError("pdf_link_invalid_url", finalUrl, {
+          drop_id: dropId,
+          original_url: link.url,
+        });
+        return;
       }
 
-      const arrayBuffer = await response.arrayBuffer()
-      console.log('PDF data received, size:', arrayBuffer.byteLength)
+      console.log("Opening URL:", finalUrl);
 
-      // Load PDF document
-      const pdf = await (window as any).pdfjsLib.getDocument({
-        data: arrayBuffer,
-        verbosity: 0
-      }).promise
+      // Open link securely
+      const newWindow = window.open(
+        finalUrl,
+        "_blank",
+        "noopener,noreferrer,width=1024,height=768"
+      );
+      if (newWindow) {
+        toast.success(`Opened: ${truncateText(link.text, 20)}`);
+        setShowLinksDropdown(false);
 
-      console.log('PDF loaded successfully. Pages:', pdf.numPages)
-      setTotalPages(pdf.numPages)
+        trackEvent("pdf_external_link_opened", {
+          drop_id: dropId,
+          final_url: finalUrl,
+          link_text: link.text,
+        });
+      } else {
+        toast.error("Popup blocked. Please allow popups for this site.");
 
-      const pages: PDFPageData[] = []
-      const allExtractedLinks: PDFLink[] = []
-
-      // Convert each page to image and extract links with text
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        console.log(`Processing page ${pageNum}/${pdf.numPages}`)
-        
-        try {
-          const page = await pdf.getPage(pageNum)
-          
-          // Create canvas for rendering
-          const canvas = document.createElement('canvas')
-          const context = canvas.getContext('2d')
-          
-          if (!context) {
-            console.error(`Failed to get canvas context for page ${pageNum}`)
-            continue
-          }
-
-          // Calculate scale for high quality
-          const scale = 2.0
-          const viewport = page.getViewport({ scale })
-          
-          canvas.height = viewport.height
-          canvas.width = viewport.width
-
-          // Render page to canvas
-          await page.render({
-            canvasContext: context,
-            viewport: viewport
-          }).promise
-
-          // Convert canvas to image
-          const imageDataUrl = canvas.toDataURL('image/png', 0.95)
-
-          // Extract link annotations with text
-          const annotations = await page.getAnnotations()
-          const links: PDFLink[] = []
-
-          for (const annotation of annotations) {
-            if (annotation.subtype === 'Link' && annotation.url) {
-              try {
-                // Extract the actual link text
-                const linkText = await extractLinkText(page, annotation)
-                
-                const rect = annotation.rect
-                const viewportRect = viewport.convertToViewportRectangle(rect)
-                
-                const link: PDFLink = {
-                  url: annotation.url,
-                  text: linkText,
-                  rect: viewportRect as [number, number, number, number],
-                  pageIndex: pageNum - 1,
-                  type: getLinkType(annotation.url)
-                }
-                
-                links.push(link)
-                allExtractedLinks.push(link)
-                
-                console.log(`Found link on page ${pageNum}: "${linkText}" -> ${annotation.url}`)
-              } catch (linkError) {
-                console.error(`Error processing link on page ${pageNum}:`, linkError)
-              }
-            }
-          }
-
-          pages.push({
-            imageUrl: imageDataUrl,
-            links: links,
-            width: viewport.width,
-            height: viewport.height,
-            scale: scale
-          })
-          
-          // Update progress
-          setLoadingProgress(Math.round((pageNum / pdf.numPages) * 100))
-          
-          console.log(`Page ${pageNum} processed successfully with ${links.length} links`)
-          
-        } catch (pageError) {
-          console.error(`Error processing page ${pageNum}:`, pageError)
-          // Continue with other pages
-        }
+        trackEvent("pdf_link_popup_blocked", {
+          drop_id: dropId,
+          url: finalUrl,
+        });
       }
-
-      if (pages.length === 0) {
-        throw new Error('Failed to process any pages')
-      }
-
-      // Save to cache
-      savePdfToCache(url, pages)
-
-      setPdfPages(pages)
-      setAllLinks(allExtractedLinks)
-      setPdfLoaded(true)
-
-      // Update session with PDF data if we're in content mode
-      if (viewMode === 'content') {
-        setTimeout(() => {
-          const currentSession = getValidSession()
-          if (currentSession) {
-            saveVerificationSession(
-              currentSession.email,
-              personalExpiresAt,
-              contentUrl,
-              contentType,
-              dropData,
-              pages // Save the newly converted pages
-            )
-            console.log('Session updated with PDF data')
-          }
-        }, 500)
-      }
-
-      console.log(`Successfully processed ${pages.length} pages with ${allExtractedLinks.length} total links`)
-
     } catch (error) {
-      console.error('Error converting PDF to images:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-      setPdfError(`Failed to load PDF: ${errorMessage}`)
-    }
-  }, [dropId, viewMode, personalExpiresAt, contentUrl, contentType, dropData])
+      console.error("Error opening link:", error);
+      toast.error("Failed to open link");
 
-  // Handle link clicks with analytics
-  // Handle link clicks with analytics
-const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
-  event.preventDefault()
-  event.stopPropagation()
-  
-  try {
-    console.log(`PDF link clicked: "${link.text}" -> ${link.url} (Page ${link.pageIndex + 1})`)
-    
-    let finalUrl = link.url.trim()
-    
-    // Handle different URL formats
-    if (finalUrl.startsWith('mailto:')) {
-      // Email links - use as-is
-      window.location.href = finalUrl
-      toast.success(`Opening email: ${truncateText(link.text, 20)}`)
-      setShowLinksDropdown(false)
-      return
-    } else if (finalUrl.startsWith('http://') || finalUrl.startsWith('https://')) {
-      // Already has protocol - use as-is
-      // finalUrl is already correct
-    } else if (finalUrl.startsWith('www.')) {
-      // Add https to www links
-      finalUrl = `https://${finalUrl}`
-    } else if (finalUrl.includes('.') && !finalUrl.startsWith('#')) {
-      // Looks like a domain - add https
-      finalUrl = `https://${finalUrl}`
-    } else {
-      // Internal link or other format
-      console.warn('Unhandled link format:', finalUrl)
-      toast.error('Unsupported link format')
-      return
+      trackError(
+        "pdf_link_open_failed",
+        error instanceof Error ? error.message : "Unknown error",
+        {
+          drop_id: dropId,
+          link_url: link.url,
+        }
+      );
     }
-    
-    // Validate the final URL
-    try {
-      new URL(finalUrl)
-    } catch (urlError) {
-      console.error('Invalid URL after processing:', finalUrl)
-      toast.error('Invalid link detected')
-      return
-    }
-    
-    console.log('Opening URL:', finalUrl)
-    
-    // Open link securely
-    const newWindow = window.open(finalUrl, '_blank', 'noopener,noreferrer,width=1024,height=768')
-    if (newWindow) {
-      toast.success(`Opened: ${truncateText(link.text, 20)}`)
-      setShowLinksDropdown(false)
-    } else {
-      toast.error('Popup blocked. Please allow popups for this site.')
-    }
-  } catch (error) {
-    console.error('Error opening link:', error)
-    toast.error('Failed to open link')
-  }
-}
+  };
 
   // Trigger PDF conversion when content changes
   useEffect(() => {
-    if (contentType === 'pdf' && contentUrl && viewMode === 'content') {
-      console.log('Effect: Loading PDF (checking cache first):', contentUrl)
-      convertPdfToImages(contentUrl)
+    if (contentType === "pdf" && contentUrl && viewMode === "content") {
+      console.log("Effect: Loading PDF (checking cache first):", contentUrl);
+      convertPdfToImages(contentUrl);
     }
-  }, [contentType, contentUrl, viewMode, convertPdfToImages])
+  }, [contentType, contentUrl, viewMode, convertPdfToImages]);
 
   // Access logging
   const logAccess = async (userEmail: string, granted: boolean = true) => {
     try {
-      const response = await fetch('/api/log-access', {
-        method: 'POST',
+      const response = await fetch("/api/log-access", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           drop_id: dropId,
           recipient_email: userEmail,
           access_granted: granted,
           user_agent: navigator.userAgent,
-          location: null
-        })
-      })
+          location: null,
+        }),
+      });
 
       if (!response.ok) {
-        console.error('Failed to log access:', await response.text())
+        console.error("Failed to log access:", await response.text());
       }
     } catch (error) {
-      console.error('Error logging access:', error)
+      console.error("Error logging access:", error);
     }
-  }
+  };
 
   // Session management
-  const saveVerificationSession = (email: string, accessExpiresAt?: Date, contentUrl?: string, contentType?: string, dropData?: DropData, pdfPages?: PDFPageData[]) => {
+  const saveVerificationSession = (
+    email: string,
+    accessExpiresAt?: Date,
+    contentUrl?: string,
+    contentType?: string,
+    dropData?: DropData,
+    pdfPages?: PDFPageData[]
+  ) => {
     const session: VerificationSession = {
       dropId,
       email,
@@ -737,527 +931,714 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
       contentUrl,
       contentType,
       dropData,
-      pdfPages
-    }
-    
+      pdfPages,
+    };
+
     try {
-      const existingSessions = getStoredSessions()
-      const filteredSessions = existingSessions.filter(s => s.dropId !== dropId)
-      filteredSessions.push(session)
-      const validSessions = filteredSessions.filter(s => s.expiresAt > Date.now())
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(validSessions))
-      console.log('Session saved successfully')
+      const existingSessions = getStoredSessions();
+      const filteredSessions = existingSessions.filter((s) => s.dropId !== dropId);
+      filteredSessions.push(session);
+      const validSessions = filteredSessions.filter((s) => s.expiresAt > Date.now());
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(validSessions));
+      console.log("Session saved successfully");
+
+      // Track session save
+      trackEvent("verification_session_saved", {
+        drop_id: dropId,
+        recipient_email: email,
+        has_pdf_pages: !!pdfPages,
+        content_type: contentType,
+      });
     } catch (error) {
-      console.error('Failed to save verification session:', error)
+      console.error("Failed to save verification session:", error);
+      trackError(
+        "session_save_failed",
+        error instanceof Error ? error.message : "Unknown error",
+        {
+          drop_id: dropId,
+        }
+      );
     }
-  }
+  };
 
   const getStoredSessions = (): VerificationSession[] => {
     try {
-      const stored = localStorage.getItem(SESSION_STORAGE_KEY)
-      return stored ? JSON.parse(stored) : []
+      const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : [];
     } catch (error) {
-      return []
+      return [];
     }
-  }
+  };
 
   const getValidSession = (): VerificationSession | null => {
     try {
-      const sessions = getStoredSessions()
-      const session = sessions.find(s => s.dropId === dropId)
-      return session && isValidSession(session) ? session : null
+      const sessions = getStoredSessions();
+      const session = sessions.find((s) => s.dropId === dropId);
+      return session && isValidSession(session) ? session : null;
     } catch (error) {
-      console.error('Error getting session:', error)
-      return null
+      console.error("Error getting session:", error);
+      return null;
     }
-  }
+  };
 
   const clearSession = () => {
     try {
-      const sessions = getStoredSessions()
-      const filteredSessions = sessions.filter(s => s.dropId !== dropId)
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(filteredSessions))
-      clearPdfCache()
-      console.log('Session cleared')
-    } catch (error) {
-      console.error('Failed to clear session:', error)
-    }
-  }
+      const sessions = getStoredSessions();
+      const filteredSessions = sessions.filter((s) => s.dropId !== dropId);
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(filteredSessions));
+      clearPdfCache();
+      console.log("Session cleared");
 
-  const restoreFromCache = useCallback((session: VerificationSession) => {
-    console.log('Restoring session:', session)
-    
-    try {
-      if (session.dropData) {
-        setDropData(session.dropData)
-        console.log('Drop data restored')
-      }
-      if (session.contentUrl) {
-        setContentUrl(session.contentUrl)
-        console.log('Content URL restored:', session.contentUrl)
-      }
-      if (session.contentType) {
-        setContentType(session.contentType)
-        console.log('Content type restored:', session.contentType)
-      }
-      if (session.accessExpiresAt) {
-        setPersonalExpiresAt(new Date(session.accessExpiresAt))
-        console.log('Personal expiry restored')
-      }
-      if (session.pdfPages && session.contentType === 'pdf') {
-        setPdfPages(session.pdfPages)
-        setTotalPages(session.pdfPages.length)
-        setPdfLoaded(true)
-        setLoadingProgress(100)
-        
-        // Extract all links from cached pages
-        const links: PDFLink[] = []
-        session.pdfPages.forEach(page => {
-          links.push(...page.links)
-        })
-        setAllLinks(links)
-        console.log('PDF pages and links restored from session cache')
-      }
-      setEmail(session.email)
-      console.log('Session restoration complete')
+      // Track session clear
+      trackEvent("verification_session_cleared", {
+        drop_id: dropId,
+      });
     } catch (error) {
-      console.error('Error restoring from cache:', error)
-      // Clear corrupted session and force re-verification
-      clearSession()
-      setViewMode('verification')
+      console.error("Failed to clear session:", error);
     }
-  }, [])
+  };
+
+  const restoreFromCache = useCallback(
+    (session: VerificationSession) => {
+      console.log("Restoring session:", session);
+
+      try {
+        if (session.dropData) {
+          setDropData(session.dropData);
+          console.log("Drop data restored");
+        }
+        if (session.contentUrl) {
+          setContentUrl(session.contentUrl);
+          console.log("Content URL restored:", session.contentUrl);
+        }
+        if (session.contentType) {
+          setContentType(session.contentType);
+          console.log("Content type restored:", session.contentType);
+        }
+        if (session.accessExpiresAt) {
+          setPersonalExpiresAt(new Date(session.accessExpiresAt));
+          console.log("Personal expiry restored");
+        }
+        if (session.pdfPages && session.contentType === "pdf") {
+          setPdfPages(session.pdfPages);
+          setTotalPages(session.pdfPages.length);
+          setPdfLoaded(true);
+          setLoadingProgress(100);
+
+          // Extract all links from cached pages
+          const links: PDFLink[] = [];
+          session.pdfPages.forEach((page) => {
+            links.push(...page.links);
+          });
+          setAllLinks(links);
+          console.log("PDF pages and links restored from session cache");
+        }
+        setEmail(session.email);
+        console.log("Session restoration complete");
+
+        // Track session restoration
+        trackEvent("verification_session_restored", {
+          drop_id: dropId,
+          recipient_email: session.email,
+          has_pdf_pages: !!session.pdfPages,
+          content_type: session.contentType,
+        });
+      } catch (error) {
+        console.error("Error restoring from cache:", error);
+        // Clear corrupted session and force re-verification
+        clearSession();
+        setViewMode("verification");
+
+        trackError(
+          "session_restore_failed",
+          error instanceof Error ? error.message : "Unknown error",
+          {
+            drop_id: dropId,
+          }
+        );
+      }
+    },
+    [dropId, trackEvent, trackError]
+  );
 
   const getAccessType = () => {
-    if (!dropData) return 'unknown'
-    return dropData.expires_at ? 'creation' : 'verification'
-  }
+    if (!dropData) return "unknown";
+    return dropData.expires_at ? "creation" : "verification";
+  };
 
   const getTimerInfo = () => {
-    if (!dropData) return { label: 'Loading...', description: '' }
-    
+    if (!dropData) return { label: "Loading...", description: "" };
+
     if (dropData.expires_at) {
       return {
-        label: 'Shared Deadline',
-        description: 'All recipients have the same deadline'
-      }
+        label: "Shared Deadline",
+        description: "All recipients have the same deadline",
+      };
     } else if (dropData.default_time_limit_hours) {
-      const hours = dropData.default_time_limit_hours
-      let timeString = ''
+      const hours = dropData.default_time_limit_hours;
+      let timeString = "";
       if (hours < 24) {
-        timeString = `${hours} hour${hours !== 1 ? 's' : ''}`
+        timeString = `${hours} hour${hours !== 1 ? "s" : ""}`;
       } else {
-        const days = Math.floor(hours / 24)
-        const remainingHours = hours % 24
-        timeString = remainingHours === 0 ? `${days} day${days !== 1 ? 's' : ''}` : `${days}d ${remainingHours}h`
+        const days = Math.floor(hours / 24);
+        const remainingHours = hours % 24;
+        timeString =
+          remainingHours === 0
+            ? `${days} day${days !== 1 ? "s" : ""}`
+            : `${days}d ${remainingHours}h`;
       }
       return {
         label: `${timeString} per recipient`,
-        description: 'Personal timer starts after verification'
-      }
+        description: "Personal timer starts after verification",
+      };
     }
-    return { label: 'No time limit', description: '' }
-  }
+    return { label: "No time limit", description: "" };
+  };
 
   // Timer countdown effect
   useEffect(() => {
-    if (!dropData || viewMode !== 'content') return
+    if (!dropData || viewMode !== "content") return;
 
     const updateTimer = () => {
-      const now = new Date()
-      let targetTime: Date | undefined = undefined
+      const now = new Date();
+      let targetTime: Date | undefined = undefined;
 
       if (dropData.expires_at) {
-        targetTime = new Date(dropData.expires_at)
+        targetTime = new Date(dropData.expires_at);
       } else if (personalExpiresAt) {
-        targetTime = personalExpiresAt
+        targetTime = personalExpiresAt;
       }
 
       if (!targetTime) {
-        setTimeRemaining('No expiry')
-        return
+        setTimeRemaining("No expiry");
+        return;
       }
 
-      const diff = targetTime.getTime() - now.getTime()
-      
+      const diff = targetTime.getTime() - now.getTime();
+
       if (diff <= 0) {
-        setTimeRemaining('Expired')
-        setError('Access has expired')
-        clearSession()
-        setViewMode('error')
-        return
-      }
-      
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000)
-      
-      if (days > 0) {
-        setTimeRemaining(`${days}d ${hours}h ${minutes}m`)
-      } else if (hours > 0) {
-        setTimeRemaining(`${hours}h ${minutes}m ${seconds}s`)
-      } else if (minutes > 0) {
-        setTimeRemaining(`${minutes}m ${seconds}s`)
-      } else {
-        setTimeRemaining(`${seconds}s`)
-      }
-    }
+        setTimeRemaining("Expired");
+        setError("Access has expired");
+        clearSession();
+        setViewMode("error");
 
-    updateTimer()
-    const interval = setInterval(updateTimer, 1000)
-    return () => clearInterval(interval)
-  }, [dropData, personalExpiresAt, viewMode])
+        // Track expiry
+        trackEvent("drop_access_expired", {
+          drop_id: dropId,
+          recipient_email: email,
+          access_type: getAccessType(),
+        });
+        return;
+      }
+
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      if (days > 0) {
+        setTimeRemaining(`${days}d ${hours}h ${minutes}m`);
+      } else if (hours > 0) {
+        setTimeRemaining(`${hours}h ${minutes}m ${seconds}s`);
+      } else if (minutes > 0) {
+        setTimeRemaining(`${minutes}m ${seconds}s`);
+      } else {
+        setTimeRemaining(`${seconds}s`);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [dropData, personalExpiresAt, viewMode, dropId, email, trackEvent]);
 
   useEffect(() => {
     if (dropId) {
-      checkDropAvailability()
+      checkDropAvailability();
     }
-  }, [dropId])
+  }, [dropId]);
 
   useEffect(() => {
-    if (!dropData || viewMode !== 'verification') return
+    if (!dropData || viewMode !== "verification") return;
 
     const updateVerificationTimer = () => {
       if (dropData.expires_at) {
-        const now = new Date()
-        const expiresAt = new Date(dropData.expires_at)
-        const diff = expiresAt.getTime() - now.getTime()
-        
+        const now = new Date();
+        const expiresAt = new Date(dropData.expires_at);
+        const diff = expiresAt.getTime() - now.getTime();
+
         if (diff <= 0) {
-          setTimeRemaining('Expired')
-          return
+          setTimeRemaining("Expired");
+          return;
         }
-        
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-        
+
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
         if (days > 0) {
-          setTimeRemaining(`${days}d ${hours}h remaining`)
+          setTimeRemaining(`${days}d ${hours}h remaining`);
         } else if (hours > 0) {
-          setTimeRemaining(`${hours}h ${minutes}m remaining`)
+          setTimeRemaining(`${hours}h ${minutes}m remaining`);
         } else {
-          setTimeRemaining(`${minutes}m remaining`)
+          setTimeRemaining(`${minutes}m remaining`);
         }
       } else if (dropData.default_time_limit_hours) {
-        const hours = dropData.default_time_limit_hours
-        const timeString = hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
-        setTimeRemaining(`${timeString} after verification`)
+        const hours = dropData.default_time_limit_hours;
+        const timeString = hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+        setTimeRemaining(`${timeString} after verification`);
       }
-    }
+    };
 
-    updateVerificationTimer()
-    const interval = setInterval(updateVerificationTimer, 60000)
-    return () => clearInterval(interval)
-  }, [dropData, viewMode])
+    updateVerificationTimer();
+    const interval = setInterval(updateVerificationTimer, 60000);
+    return () => clearInterval(interval);
+  }, [dropData, viewMode]);
 
   const checkDropAvailability = async () => {
     try {
-      setViewMode('loading')
+      setViewMode("loading");
 
       // Check for existing valid session first
-      const existingSession = getValidSession()
+      const existingSession = getValidSession();
       if (existingSession) {
-        console.log('Found existing session, restoring...')
+        console.log("Found existing session, restoring...");
         try {
-          restoreFromCache(existingSession)
-          setViewMode('content')
-          return
+          restoreFromCache(existingSession);
+          setViewMode("content");
+          return;
         } catch (error) {
-          console.error('Failed to restore session, clearing and re-verifying:', error)
-          clearSession()
+          console.error("Failed to restore session, clearing and re-verifying:", error);
+          clearSession();
           // Continue to verification
         }
       }
 
       const { data: dropResults, error: dropError } = await supabase
-        .from('drops')
-        .select('*')
-        .eq('id', dropId)
+        .from("drops")
+        .select("*")
+        .eq("id", dropId);
 
       if (dropError) {
-        console.error('Database error:', dropError)
-        setError('Failed to load drop')
-        setViewMode('error')
-        return
+        console.error("Database error:", dropError);
+        setError("Failed to load drop");
+        setViewMode("error");
+
+        trackError("drop_load_failed", dropError.message, {
+          drop_id: dropId,
+          error_code: dropError.code,
+        });
+        return;
       }
 
       if (!dropResults || dropResults.length === 0) {
-        setError('Drop not found - this link may be invalid or expired')
-        setViewMode('error')
-        return
+        setError("Drop not found - this link may be invalid or expired");
+        setViewMode("error");
+
+        trackEvent("drop_not_found", {
+          drop_id: dropId,
+        });
+        return;
       }
 
-      const drop = dropResults[0]
-      setDropData(drop)
+      const drop = dropResults[0];
+      setDropData(drop);
+
+      // Track drop info
+      trackEvent("drop_info_loaded", {
+        drop_id: dropId,
+        drop_type: drop.drop_type,
+        has_expiry: !!drop.expires_at,
+        has_time_limit: !!drop.default_time_limit_hours,
+        is_active: drop.is_active,
+        one_time_access: drop.one_time_access,
+      });
 
       if (!drop.is_active) {
-        setError('This drop is no longer active')
-        setViewMode('error')
-        return
+        setError("This drop is no longer active");
+        setViewMode("error");
+
+        trackEvent("drop_inactive", {
+          drop_id: dropId,
+        });
+        return;
       }
 
       if (drop.expires_at) {
-        const now = new Date()
-        const expiresAt = new Date(drop.expires_at)
+        const now = new Date();
+        const expiresAt = new Date(drop.expires_at);
         if (expiresAt < now) {
-          setError('This drop has expired')
-          setViewMode('error')
-          return
+          setError("This drop has expired");
+          setViewMode("error");
+
+          trackEvent("drop_expired_at_load", {
+            drop_id: dropId,
+            expired_at: drop.expires_at,
+          });
+          return;
         }
       }
 
       if (drop.one_time_access) {
         const { data: accessLogs } = await supabase
-          .from('drop_access_logs')
-          .select('id')
-          .eq('drop_id', dropId)
-          .limit(1)
+          .from("drop_access_logs")
+          .select("id")
+          .eq("drop_id", dropId)
+          .limit(1);
 
         if (accessLogs && accessLogs.length > 0) {
-          setError('This drop has already been accessed (one-time access only)')
-          setViewMode('error')
-          return
+          setError("This drop has already been accessed (one-time access only)");
+          setViewMode("error");
+
+          trackEvent("drop_one_time_already_accessed", {
+            drop_id: dropId,
+          });
+          return;
         }
       }
 
-      setViewMode('verification')
-
+      setViewMode("verification");
     } catch (err) {
-      console.error('Error checking drop:', err)
-      setError('An error occurred while loading the drop')
-      setViewMode('error')
+      console.error("Error checking drop:", err);
+      setError("An error occurred while loading the drop");
+      setViewMode("error");
+
+      trackError(
+        "drop_availability_check_failed",
+        err instanceof Error ? err.message : "Unknown error",
+        {
+          drop_id: dropId,
+        }
+      );
     }
-  }
+  };
 
   const verifyEmail = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
+    e.preventDefault();
+
     if (!email.trim()) {
-      toast.error('Please enter your email')
-      return
+      toast.error("Please enter your email");
+      return;
     }
 
-    setVerifying(true)
+    setVerifying(true);
+    const startTime = Date.now();
+
+    // Track verification attempt
+    trackEvent("email_verification_attempted", {
+      drop_id: dropId,
+      email_domain: email.split("@")[1] || "unknown",
+    });
 
     try {
-      await logAccess(email.toLowerCase().trim(), false)
+      await logAccess(email.toLowerCase().trim(), false);
 
       const { data: recipient, error: recipientError } = await supabase
-        .from('drop_recipients')
-        .select('*')
-        .eq('drop_id', dropId)
-        .eq('email', email.toLowerCase().trim())
-        .single()
+        .from("drop_recipients")
+        .select("*")
+        .eq("drop_id", dropId)
+        .eq("email", email.toLowerCase().trim())
+        .single();
 
       if (recipientError || !recipient) {
-        setError('You do not have permission to access this drop')
-        setVerifying(false)
-        return
+        setError("You do not have permission to access this drop");
+        setVerifying(false);
+
+        trackEvent("email_verification_failed", {
+          drop_id: dropId,
+          email_domain: email.split("@")[1] || "unknown",
+          error: "not_authorized",
+        });
+        return;
       }
 
-      await logAccess(email.toLowerCase().trim(), true)
+      // Track successful verification
+      const verificationTime = Date.now() - startTime;
+      trackDropAccessed(dropId, {
+        recipientEmail: email.toLowerCase().trim(),
+        accessMethod: "email",
+        userAgent: navigator.userAgent,
+      });
 
-      const verifiedAt = new Date()
-      let personalExpiry: Date | undefined = undefined
-      let sessionExpiry: Date | undefined = undefined
+      trackEvent("email_verification_successful", {
+        drop_id: dropId,
+        recipient_email: email.toLowerCase().trim(),
+        verification_time_ms: verificationTime,
+        was_previously_verified: !!recipient.verified_at,
+      });
+
+      await logAccess(email.toLowerCase().trim(), true);
+
+      const verifiedAt = new Date();
+      let personalExpiry: Date | undefined = undefined;
+      let sessionExpiry: Date | undefined = undefined;
 
       if (dropData?.expires_at) {
-        personalExpiry = new Date(dropData.expires_at)
-        sessionExpiry = personalExpiry
+        personalExpiry = new Date(dropData.expires_at);
+        sessionExpiry = personalExpiry;
       } else if (dropData?.default_time_limit_hours) {
         if (!recipient.verified_at) {
-          personalExpiry = new Date(verifiedAt.getTime() + (dropData.default_time_limit_hours * 60 * 60 * 1000))
-          sessionExpiry = personalExpiry
+          personalExpiry = new Date(
+            verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000
+          );
+          sessionExpiry = personalExpiry;
         } else {
           if (recipient.personal_expires_at) {
-            personalExpiry = new Date(recipient.personal_expires_at)
-            sessionExpiry = personalExpiry
+            personalExpiry = new Date(recipient.personal_expires_at);
+            sessionExpiry = personalExpiry;
           } else {
-            personalExpiry = new Date(verifiedAt.getTime() + (dropData.default_time_limit_hours * 60 * 60 * 1000))
-            sessionExpiry = personalExpiry
+            personalExpiry = new Date(
+              verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000
+            );
+            sessionExpiry = personalExpiry;
           }
         }
       }
 
-      setPersonalExpiresAt(personalExpiry)
+      setPersonalExpiresAt(personalExpiry);
 
       if (dropData?.default_time_limit_hours && !recipient.verified_at) {
         await supabase
-          .from('drop_recipients')
+          .from("drop_recipients")
           .update({
             verified_at: verifiedAt.toISOString(),
-            personal_expires_at: personalExpiry?.toISOString() ?? undefined
+            personal_expires_at: personalExpiry?.toISOString() ?? undefined,
           })
-          .eq('id', recipient.id)
+          .eq("id", recipient.id);
       } else if (dropData?.expires_at) {
         await supabase
-          .from('drop_recipients')
+          .from("drop_recipients")
           .update({
             verified_at: verifiedAt.toISOString(),
-            personal_expires_at: personalExpiry?.toISOString() ?? undefined
+            personal_expires_at: personalExpiry?.toISOString() ?? undefined,
           })
-          .eq('id', recipient.id)
+          .eq("id", recipient.id);
       }
 
       await supabase
-        .from('drop_recipients')
+        .from("drop_recipients")
         .update({
           accessed_at: new Date().toISOString(),
-          access_count: (recipient.access_count || 0) + 1
+          access_count: (recipient.access_count || 0) + 1,
         })
-        .eq('id', recipient.id)
+        .eq("id", recipient.id);
 
-      await loadContent()
+      await loadContent();
 
-      setViewMode('content')
-      
+      setViewMode("content");
+
       // Save session AFTER everything is loaded and state is set
       setTimeout(() => {
         saveVerificationSession(
-          email.toLowerCase().trim(), 
-          sessionExpiry, 
-          contentUrl, 
-          contentType, 
+          email.toLowerCase().trim(),
+          sessionExpiry,
+          contentUrl,
+          contentType,
           dropData,
           pdfPages
-        )
-        console.log('Session saved after content load')
-      }, 1000) // Give time for all state to settle
+        );
+        console.log("Session saved after content load");
+      }, 1000); // Give time for all state to settle
 
-      toast.success('Email verified successfully')
-
+      toast.success("Email verified successfully");
     } catch (err) {
-      console.error('Error verifying email:', err)
-      setError('Failed to verify email')
+      console.error("Error verifying email:", err);
+      setError("Failed to verify email");
+
+      trackError(
+        "email_verification_error",
+        err instanceof Error ? err.message : "Unknown error",
+        {
+          drop_id: dropId,
+          recipient_email: email,
+        }
+      );
     } finally {
-      setVerifying(false)
+      setVerifying(false);
     }
-  }
+  };
 
   const loadContent = async () => {
-    setLoading(true)
+    setLoading(true);
+    const startTime = Date.now();
 
     try {
-      if (dropData?.drop_type === 'url' && dropData.masked_url) {
-        await handleUrlContent(dropData.masked_url)
-      } else if (dropData?.drop_type === 'file' && dropData.file_path) {
-        await handleFileContent(dropData.file_path)
+      if (dropData?.drop_type === "url" && dropData.masked_url) {
+        await handleUrlContent(dropData.masked_url);
+      } else if (dropData?.drop_type === "file" && dropData.file_path) {
+        await handleFileContent(dropData.file_path);
       }
+
+      // Track content load success
+      const loadTime = Date.now() - startTime;
+      trackEvent("content_loaded", {
+        drop_id: dropId,
+        content_type: contentType,
+        drop_type: dropData?.drop_type,
+        load_time_ms: loadTime,
+      });
+
+      trackPerformance("content_load_time", loadTime, "milliseconds");
     } catch (err) {
-      console.error('Error loading content:', err)
-      toast.error('Failed to load content')
+      console.error("Error loading content:", err);
+      toast.error("Failed to load content");
+
+      trackError(
+        "content_load_failed",
+        err instanceof Error ? err.message : "Unknown error",
+        {
+          drop_id: dropId,
+          drop_type: dropData?.drop_type,
+        }
+      );
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleUrlContent = async (url: string) => {
-    const cleanUrl = url.trim()
-    
+    const cleanUrl = url.trim();
+
     if (isGoogleDocsUrl(cleanUrl)) {
-      setContentType('google-docs')
-      setContentUrl(convertGoogleDocsToEmbedUrl(cleanUrl))
+      setContentType("google-docs");
+      setContentUrl(convertGoogleDocsToEmbedUrl(cleanUrl));
     } else if (isYouTubeUrl(cleanUrl)) {
-      setContentType('youtube')
-      setContentUrl(convertYouTubeToEmbedUrl(cleanUrl))
+      setContentType("youtube");
+      setContentUrl(convertYouTubeToEmbedUrl(cleanUrl));
     } else if (isGoogleSlidesUrl(cleanUrl)) {
-      setContentType('google-slides')
-      setContentUrl(convertGoogleSlidesToEmbedUrl(cleanUrl))
+      setContentType("google-slides");
+      setContentUrl(convertGoogleSlidesToEmbedUrl(cleanUrl));
     } else if (isGoogleSheetsUrl(cleanUrl)) {
-      setContentType('google-sheets')
-      setContentUrl(convertGoogleSheetsToEmbedUrl(cleanUrl))
+      setContentType("google-sheets");
+      setContentUrl(convertGoogleSheetsToEmbedUrl(cleanUrl));
     } else {
-      setContentType('website')
-      setContentUrl(cleanUrl)
+      setContentType("website");
+      setContentUrl(cleanUrl);
     }
-  }
+
+    // Track URL content type
+    trackFeatureUsed("url_content_accessed", {
+      drop_id: dropId,
+      url_type: isGoogleDocsUrl(cleanUrl)
+        ? "google_docs"
+        : isYouTubeUrl(cleanUrl)
+        ? "youtube"
+        : isGoogleSlidesUrl(cleanUrl)
+        ? "google_slides"
+        : isGoogleSheetsUrl(cleanUrl)
+        ? "google_sheets"
+        : "website",
+      url_domain: new URL(cleanUrl).hostname,
+    });
+  };
 
   const handleFileContent = async (filePath: string) => {
     try {
-      const { data, error } = await supabase.storage
-        .from('drops')
-        .createSignedUrl(filePath, 3600)
+      const { data, error } = await supabase.storage.from("drops").createSignedUrl(filePath, 3600);
 
-      if (error) throw error
+      if (error) throw error;
 
-      const fileName = filePath.split('/').pop()?.toLowerCase() || ''
-      const fileExt = fileName.split('.').pop() || ''
+      const fileName = filePath.split("/").pop()?.toLowerCase() || "";
+      const fileExt = fileName.split(".").pop() || "";
 
-      setContentUrl(data.signedUrl)
+      setContentUrl(data.signedUrl);
 
-      if (['pdf'].includes(fileExt)) {
-        setContentType('pdf')
-      } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExt)) {
-        setContentType('image')
-      } else if (['mp4', 'webm', 'ogg'].includes(fileExt)) {
-        setContentType('video')
-      } else if (['mp3', 'wav', 'ogg'].includes(fileExt)) {
-        setContentType('audio')
-      } else if (['txt', 'md', 'json', 'csv'].includes(fileExt)) {
-        setContentType('text')
+      if (["pdf"].includes(fileExt)) {
+        setContentType("pdf");
+      } else if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(fileExt)) {
+        setContentType("image");
+      } else if (["mp4", "webm", "ogg"].includes(fileExt)) {
+        setContentType("video");
+      } else if (["mp3", "wav", "ogg"].includes(fileExt)) {
+        setContentType("audio");
+      } else if (["txt", "md", "json", "csv"].includes(fileExt)) {
+        setContentType("text");
       } else {
-        setContentType('file')
+        setContentType("file");
       }
-    } catch (err) {
-      console.error('Error loading file:', err)
-      toast.error('Failed to load file')
-    }
-  }
 
-  const isGoogleDocsUrl = (url: string) => url.includes('docs.google.com/document')
-  const isGoogleSlidesUrl = (url: string) => url.includes('docs.google.com/presentation')
-  const isGoogleSheetsUrl = (url: string) => url.includes('docs.google.com/spreadsheets')
-  const isYouTubeUrl = (url: string) => url.includes('youtube.com/watch') || url.includes('youtu.be/')
+      // Track file content type
+      trackFeatureUsed("file_content_accessed", {
+        drop_id: dropId,
+        file_extension: fileExt,
+        file_type: ["pdf"].includes(fileExt)
+          ? "pdf"
+          : ["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(fileExt)
+          ? "image"
+          : ["mp4", "webm", "ogg"].includes(fileExt)
+          ? "video"
+          : ["mp3", "wav", "ogg"].includes(fileExt)
+          ? "audio"
+          : ["txt", "md", "json", "csv"].includes(fileExt)
+          ? "text"
+          : "other",
+      });
+    } catch (err) {
+      console.error("Error loading file:", err);
+      toast.error("Failed to load file");
+      throw err;
+    }
+  };
+
+  const isGoogleDocsUrl = (url: string) => url.includes("docs.google.com/document");
+  const isGoogleSlidesUrl = (url: string) => url.includes("docs.google.com/presentation");
+  const isGoogleSheetsUrl = (url: string) => url.includes("docs.google.com/spreadsheets");
+  const isYouTubeUrl = (url: string) =>
+    url.includes("youtube.com/watch") || url.includes("youtu.be/");
 
   const convertGoogleDocsToEmbedUrl = (url: string) => {
-    const docId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1]
-    return docId ? `https://docs.google.com/document/d/${docId}/preview` : url
-  }
+    const docId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+    return docId ? `https://docs.google.com/document/d/${docId}/preview` : url;
+  };
 
   const convertGoogleSlidesToEmbedUrl = (url: string) => {
-    const slideId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1]
-    return slideId ? `https://docs.google.com/presentation/d/${slideId}/embed?start=false&loop=false&delayms=3000` : url
-  }
+    const slideId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+    return slideId
+      ? `https://docs.google.com/presentation/d/${slideId}/embed?start=false&loop=false&delayms=3000`
+      : url;
+  };
 
   const convertGoogleSheetsToEmbedUrl = (url: string) => {
-    const sheetId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1]
-    return sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/preview` : url
-  }
+    const sheetId = url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+    return sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/preview` : url;
+  };
 
   const convertYouTubeToEmbedUrl = (url: string) => {
-    let videoId = ''
-    if (url.includes('youtube.com/watch')) {
-      videoId = url.split('v=')[1]?.split('&')[0] || ''
-    } else if (url.includes('youtu.be/')) {
-      videoId = url.split('youtu.be/')[1]?.split('?')[0] || ''
+    let videoId = "";
+    if (url.includes("youtube.com/watch")) {
+      videoId = url.split("v=")[1]?.split("&")[0] || "";
+    } else if (url.includes("youtu.be/")) {
+      videoId = url.split("youtu.be/")[1]?.split("?")[0] || "";
     }
-    return videoId ? `https://www.youtube.com/embed/${videoId}?enablejsapi=1` : url
-  }
+    return videoId ? `https://www.youtube.com/embed/${videoId}?enablejsapi=1` : url;
+  };
 
   const handleLogout = () => {
-    clearSession()
-    setViewMode('verification')
-    setEmail('')
-    setContentUrl(undefined)
-    setContentType('')
-    setPersonalExpiresAt(undefined)
-    setPdfLoaded(false)
-    setPdfError('')
-    setPdfPages([])
-    setTotalPages(0)
-    setAllLinks([])
-    setShowLinksDropdown(false)
-  }
+    trackButtonClick("logout", "drop_access_header", {
+      drop_id: dropId,
+    });
+
+    clearSession();
+    setViewMode("verification");
+    setEmail("");
+    setContentUrl(undefined);
+    setContentType("");
+    setPersonalExpiresAt(undefined);
+    setPdfLoaded(false);
+    setPdfError("");
+    setPdfPages([]);
+    setTotalPages(0);
+    setAllLinks([]);
+    setShowLinksDropdown(false);
+  };
 
   const renderContent = () => {
-    if (!contentUrl) return null
+    if (!contentUrl) return null;
 
-    const baseClasses = "fixed inset-0 z-30 bg-gray-400"
+    const baseClasses = "fixed inset-0 z-30 bg-gray-400";
 
     switch (contentType) {
-      case 'pdf':
+      case "pdf":
         return (
           <div className={baseClasses}>
             {/* PDF Content */}
@@ -1269,10 +1650,29 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                     <h3 className="text-lg font-medium text-red-600 mb-2">PDF Loading Error</h3>
                     <p className="text-red-500 mb-4 text-sm">{pdfError}</p>
                     <div className="space-y-2">
-                      <Button onClick={() => convertPdfToImages(contentUrl, false)} size="sm" className="w-full">
+                      <Button
+                        onClick={() => {
+                          trackButtonClick("pdf_retry_cache", "pdf_error_dialog", {
+                            drop_id: dropId,
+                          });
+                          convertPdfToImages(contentUrl, false);
+                        }}
+                        size="sm"
+                        className="w-full"
+                      >
                         Retry from Cache
                       </Button>
-                      <Button onClick={() => convertPdfToImages(contentUrl, true)} size="sm" variant="outline" className="w-full">
+                      <Button
+                        onClick={() => {
+                          trackButtonClick("pdf_force_reload", "pdf_error_dialog", {
+                            drop_id: dropId,
+                          });
+                          convertPdfToImages(contentUrl, true);
+                        }}
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                      >
                         Force Reload
                       </Button>
                     </div>
@@ -1283,14 +1683,16 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                   <div className="text-center bg-white p-8 rounded-lg shadow-lg">
                     <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
                     <p className="text-gray-600">
-                      {loadingProgress === 0 ? 'Checking cache...' : 'Converting PDF with link extraction...'}
+                      {loadingProgress === 0
+                        ? "Checking cache..."
+                        : "Converting PDF with link extraction..."}
                     </p>
                     {loadingProgress > 0 && (
                       <>
                         <p className="text-gray-400 text-sm mt-2">Progress: {loadingProgress}%</p>
                         <div className="w-full bg-gray-200 rounded-full h-2 mt-4">
-                          <div 
-                            className="bg-primary h-2 rounded-full transition-all duration-300" 
+                          <div
+                            className="bg-primary h-2 rounded-full transition-all duration-300"
                             style={{ width: `${loadingProgress}%` }}
                           />
                         </div>
@@ -1311,20 +1713,21 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                           onContextMenu={(e) => e.preventDefault()}
                           onDragStart={(e) => e.preventDefault()}
                         />
-                        
+
                         {/* Page number overlay */}
                         <div className="absolute top-4 left-4 bg-black/70 text-white px-2 py-1 rounded text-sm pointer-events-none">
                           Page {index + 1} of {totalPages}
                           {pageData.links.length > 0 && (
                             <span className="ml-2 text-blue-300">
-                              • {pageData.links.length} link{pageData.links.length !== 1 ? 's' : ''}
+                              • {pageData.links.length} link
+                              {pageData.links.length !== 1 ? "s" : ""}
                             </span>
                           )}
                         </div>
                       </div>
                     ))}
                   </div>
-                  
+
                   {/* Watermark */}
                   <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-xs pointer-events-none">
                     🔒 This content is securely protected by DropAccess
@@ -1333,9 +1736,9 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
               )}
             </div>
           </div>
-        )
+        );
 
-      case 'youtube':
+      case "youtube":
         return (
           <div className={baseClasses}>
             <iframe
@@ -1345,13 +1748,19 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
               title={dropData?.name}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               onContextMenu={(e) => e.preventDefault()}
+              onLoad={() => {
+                trackEvent("youtube_content_loaded", {
+                  drop_id: dropId,
+                  video_url: contentUrl,
+                });
+              }}
             />
           </div>
-        )
+        );
 
-      case 'google-docs':
-      case 'google-slides':
-      case 'google-sheets':
+      case "google-docs":
+      case "google-slides":
+      case "google-sheets":
         return (
           <div className={baseClasses}>
             <div className="relative w-full h-full">
@@ -1360,17 +1769,23 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 className="w-full h-full border-0"
                 allowFullScreen
                 title={dropData?.name}
+                onLoad={() => {
+                  trackEvent("google_content_loaded", {
+                                        drop_id: dropId,
+                    google_type: contentType,
+                  });
+                }}
               />
-              <div 
+              <div
                 className="absolute inset-0 z-50 bg-transparent"
                 onContextMenu={(e) => e.preventDefault()}
-                style={{ pointerEvents: 'auto' }}
+                style={{ pointerEvents: "auto" }}
               />
             </div>
           </div>
-        )
+        );
 
-      case 'website':
+      case "website":
         return (
           <div className={baseClasses}>
             <div className="relative w-full h-full">
@@ -1379,34 +1794,51 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 className="w-full h-full border-0"
                 title={dropData?.name}
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+                onLoad={() => {
+                  trackEvent("website_content_loaded", {
+                    drop_id: dropId,
+                    website_domain: contentUrl ? new URL(contentUrl).hostname : "unknown",
+                  });
+                }}
               />
-              <div 
+              <div
                 className="absolute inset-0 z-50 bg-transparent"
                 onContextMenu={(e) => e.preventDefault()}
-                style={{ pointerEvents: 'auto' }}
+                style={{ pointerEvents: "auto" }}
               />
             </div>
           </div>
-        )
+        );
 
-      case 'image':
+      case "image":
         return (
           <div className={baseClasses}>
             <div className="w-full h-full overflow-auto p-4 flex items-center justify-center">
               <img
                 src={contentUrl}
-                alt={dropData?.name || ''}
+                alt={dropData?.name || ""}
                 className="max-w-full max-h-full object-contain bg-white shadow-lg"
                 draggable={false}
                 onContextMenu={(e) => e.preventDefault()}
                 onDragStart={(e) => e.preventDefault()}
-                style={{ pointerEvents: 'none' }}
+                style={{ pointerEvents: "none" }}
+                onLoad={() => {
+                  trackEvent("image_content_loaded", {
+                    drop_id: dropId,
+                  });
+                }}
+                onError={() => {
+                  trackError("image_load_failed", "Image failed to load", {
+                    drop_id: dropId,
+                    image_url: contentUrl,
+                  });
+                }}
               />
             </div>
           </div>
-        )
+        );
 
-      case 'video':
+      case "video":
         return (
           <div className={baseClasses}>
             <div className="w-full h-full flex items-center justify-center p-4">
@@ -1417,14 +1849,39 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 controlsList="nodownload nofullscreen noremoteplayback"
                 disablePictureInPicture
                 onContextMenu={(e) => e.preventDefault()}
+                onLoadedData={() => {
+                  trackEvent("video_content_loaded", {
+                    drop_id: dropId,
+                  });
+                }}
+                onPlay={() => {
+                  trackEvent("video_play_started", {
+                    drop_id: dropId,
+                  });
+                }}
+                onPause={() => {
+                  trackEvent("video_paused", {
+                    drop_id: dropId,
+                  });
+                }}
+                onEnded={() => {
+                  trackEvent("video_ended", {
+                    drop_id: dropId,
+                  });
+                }}
+                onError={() => {
+                  trackError("video_load_failed", "Video failed to load", {
+                    drop_id: dropId,
+                  });
+                }}
               >
                 Your browser does not support the video tag.
               </video>
             </div>
           </div>
-        )
+        );
 
-      case 'audio':
+      case "audio":
         return (
           <div className={`${baseClasses} flex items-center justify-center`}>
             <div className="text-center bg-white p-8 rounded-lg shadow-lg">
@@ -1438,14 +1895,39 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 className="w-full max-w-md mx-auto"
                 controlsList="nodownload"
                 onContextMenu={(e) => e.preventDefault()}
+                onLoadedData={() => {
+                  trackEvent("audio_content_loaded", {
+                    drop_id: dropId,
+                  });
+                }}
+                onPlay={() => {
+                  trackEvent("audio_play_started", {
+                    drop_id: dropId,
+                  });
+                }}
+                onPause={() => {
+                  trackEvent("audio_paused", {
+                    drop_id: dropId,
+                  });
+                }}
+                onEnded={() => {
+                  trackEvent("audio_ended", {
+                    drop_id: dropId,
+                  });
+                }}
+                onError={() => {
+                  trackError("audio_load_failed", "Audio failed to load", {
+                    drop_id: dropId,
+                  });
+                }}
               >
                 Your browser does not support the audio tag.
               </audio>
             </div>
           </div>
-        )
+        );
 
-      case 'text':
+      case "text":
         return (
           <div className={baseClasses}>
             <div className="relative w-full h-full overflow-auto">
@@ -1453,15 +1935,20 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 src={contentUrl}
                 className="w-full h-full border-0"
                 title={dropData?.name}
+                onLoad={() => {
+                  trackEvent("text_content_loaded", {
+                    drop_id: dropId,
+                  });
+                }}
               />
-              <div 
+              <div
                 className="absolute inset-0 z-50 bg-transparent"
                 onContextMenu={(e) => e.preventDefault()}
-                style={{ pointerEvents: 'auto' }}
+                style={{ pointerEvents: "auto" }}
               />
             </div>
           </div>
-        )
+        );
 
       default:
         return (
@@ -1476,11 +1963,11 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
               </p>
             </div>
           </div>
-        )
+        );
     }
-  }
+  };
 
-  if (viewMode === 'loading') {
+  if (viewMode === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="text-center">
@@ -1488,10 +1975,10 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
           <p className="text-gray-500 dark:text-gray-400">Loading secure drop...</p>
         </div>
       </div>
-    )
+    );
   }
 
-  if (viewMode === 'error') {
+  if (viewMode === "error") {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
         <div className="bg-white dark:bg-gray-800 rounded-xl p-8 border border-gray-200 dark:border-gray-700 max-w-md w-full text-center shadow-lg">
@@ -1500,8 +1987,14 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
           </div>
           <h2 className="text-xl font-medium text-gray-900 dark:text-white mb-2">Access Denied</h2>
           <p className="text-gray-500 dark:text-gray-400 mb-6">{error}</p>
-          <Button 
-            onClick={() => router.push('/')} 
+          <Button
+            onClick={() => {
+              trackButtonClick("go_to_homepage", "error_page", {
+                drop_id: dropId,
+                error_message: error,
+              });
+              router.push("/");
+            }}
             variant="outline"
             className="w-full"
           >
@@ -1509,13 +2002,13 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
           </Button>
         </div>
       </div>
-    )
+    );
   }
 
-  if (viewMode === 'verification') {
-    const accessType = getAccessType()
-    const timerInfo = getTimerInfo()
-    const AccessIcon = accessType === 'verification' ? Timer : CalendarDays
+  if (viewMode === "verification") {
+    const accessType = getAccessType();
+    const timerInfo = getTimerInfo();
+    const AccessIcon = accessType === "verification" ? Timer : CalendarDays;
 
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
@@ -1535,7 +2028,7 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
           {dropData && (
             <div className="mb-6 p-4 bg-primary/5 border border-primary/20 rounded-lg">
               <div className="flex items-center gap-2 mb-2">
-                {dropData.drop_type === 'file' ? (
+                {dropData.drop_type === "file" ? (
                   <FileUp className="w-4 h-4 text-primary" />
                 ) : (
                   <Link2 className="w-4 h-4 text-primary" />
@@ -1543,19 +2036,21 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                 <h3 className="font-medium text-gray-900 dark:text-white">{dropData.name}</h3>
               </div>
               {dropData.description && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{dropData.description}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                  {dropData.description}
+                </p>
               )}
-              
+
               <div className="flex items-center gap-2 text-sm mb-2">
                 <AccessIcon className="w-3 h-3 text-blue-600" />
                 <span className="text-blue-600 font-medium">
-                  {accessType === 'creation' ? 'Shared Deadline' : 'Personal Timer'}
+                  {accessType === "creation" ? "Shared Deadline" : "Personal Timer"}
                 </span>
                 <span className="text-gray-400">•</span>
                 <Clock className="w-3 h-3 text-orange-600" />
                 <span className="text-orange-600 font-medium">{timeRemaining}</span>
               </div>
-              
+
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {timerInfo.description}
               </p>
@@ -1564,7 +2059,10 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
 
           <form onSubmit={verifyEmail} className="space-y-4">
             <div>
-              <Label htmlFor="email" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
+              <Label
+                htmlFor="email"
+                className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block"
+              >
                 Email Address
               </Label>
               <div className="relative">
@@ -1587,10 +2085,17 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
               </div>
             )}
 
-            <Button 
-              type="submit" 
-              className="w-full" 
+            <Button
+              type="submit"
+              className="w-full"
               disabled={verifying}
+              onClick={() => {
+                if (!verifying) {
+                  trackButtonClick("verify_access", "verification_form", {
+                    drop_id: dropId,
+                  });
+                }
+              }}
             >
               {verifying ? (
                 <>
@@ -1613,30 +2118,23 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   return (
     <div className="h-screen bg-black relative">
       {/* Header overlay */}
-      <div 
+      <div
         className={`absolute top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm text-white transition-all duration-300 ${
-          showHeader ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'
+          showHeader
+            ? "opacity-100 translate-y-0"
+            : "opacity-0 -translate-y-full pointer-events-none"
         }`}
         onMouseEnter={() => setShowHeader(true)}
       >
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center justify-between w-full">
             <div className="flex items-center space-x-4">
-             { /*<Button
-                variant="ghost"
-                size="sm"
-                onClick={handleLogout}
-                className="text-white hover:text-gray-300 hover:bg-white/10"
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back
-              </Button>*/}
               <div>
                 <h1 className="text-lg font-semibold">{dropData?.name}</h1>
                 <div className="flex items-center space-x-4 text-sm text-gray-300">
@@ -1648,41 +2146,27 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                     <CheckCircle className="w-3 h-3 mr-1 truncate" />
                     {email}
                   </span>
-                 {/*} <span className="flex items-center">
-                    {getAccessType() === 'creation' ? (
-                      <>
-                        <CalendarDays className="w-3 h-3 mr-1" />
-                        Shared Deadline
-                      </>
-                    ) : (
-                      <>
-                        <Timer className="w-3 h-3 mr-1" />
-                        Personal Timer
-                      </>
-                    )}
-                  </span>*/}
-                  {/*contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
-                    <span className="flex items-center">
-                      <Link2 className="w-3 h-3 mr-1" />
-                      <span className="text-blue-300">
-                        {allLinks.length} links
-                      </span>
-                    </span>
-                  )*/}
                 </div>
               </div>
             </div>
 
             {/* PDF Links Dropdown in Header */}
-            {contentType === 'pdf' && pdfLoaded && allLinks.length > 0 && (
+            {contentType === "pdf" && pdfLoaded && allLinks.length > 0 && (
               <div className="relative">
                 <button
                   className="pdf-links-trigger bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg px-3 py-2 hover:bg-white/20 transition-all duration-200 flex items-center gap-2"
-                  onClick={() => setShowLinksDropdown(!showLinksDropdown)}
+                  onClick={() => {
+                    setShowLinksDropdown(!showLinksDropdown);
+                    trackButtonClick("pdf_links_dropdown_toggle", "content_header", {
+                      drop_id: dropId,
+                      links_count: allLinks.length,
+                      action: showLinksDropdown ? "close" : "open",
+                    });
+                  }}
                 >
                   <Link2 className="w-4 h-4 text-blue-400" />
                   <span className="text-sm font-medium text-white">
-                    {allLinks.length} Link{allLinks.length !== 1 ? 's' : ''}
+                    {allLinks.length} Link{allLinks.length !== 1 ? "s" : ""}
                   </span>
                   {showLinksDropdown ? (
                     <ChevronUp className="w-3 h-3 text-gray-300" />
@@ -1699,7 +2183,7 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                         PDF Links ({allLinks.length})
                       </h3>
                     </div>
-                    
+
                     <div className="py-2">
                       {allLinks.map((link, index) => (
                         <button
@@ -1719,7 +2203,7 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
                               <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
                                 <span>Pg {link.pageIndex + 1}</span>
                                 <span>•</span>
-                                <span className="truncate" style={{ maxWidth: '180px' }}>
+                                <span className="truncate" style={{ maxWidth: "180px" }}>
                                   {link.url}
                                 </span>
                               </div>
@@ -1738,13 +2222,13 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
       </div>
 
       {/* Header trigger area */}
-      <div 
+      <div
         className="absolute top-0 left-0 right-0 h-16 z-40"
         onMouseEnter={() => setShowHeader(true)}
       />
 
       {/* Content */}
-      <div 
+      <div
         className="h-full"
         onMouseEnter={() => setShowHeader(false)}
         onMouseLeave={() => setShowHeader(true)}
@@ -1761,7 +2245,7 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
         )}
       </div>
 
-      {contentType !== 'pdf' && (
+      {contentType !== "pdf" && (
         <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-50">
           <div className="bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-xs">
             🔒 Content securely hosted by DropAccess
@@ -1769,5 +2253,5 @@ const handleLinkClick = (link: PDFLink, event: React.MouseEvent) => {
         </div>
       )}
     </div>
-  )
+  );
 }
