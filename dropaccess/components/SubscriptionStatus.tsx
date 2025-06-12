@@ -81,9 +81,10 @@ export function SubscriptionStatus() {
         setSubscriptionData(data)
       }
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error fetching subscription data:', err)
-      setError('Failed to load subscription data')
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load subscription data'
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
