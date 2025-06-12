@@ -44,6 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { SubscriptionStatus } from '@/components/SubscriptionStatus'
 
 interface Drop {
   id: string
@@ -785,6 +786,8 @@ function DashboardPageContent() {
             </div>
           </div>
         </div>
+
+        <SubscriptionStatus/>
 
         {/* Drops Display */}
         {filteredDrops.length === 0 ? (

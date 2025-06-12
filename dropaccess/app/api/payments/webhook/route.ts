@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { supabaseAdmin } from '@/lib/supabaseClient';
 import { WEBHOOK_EVENTS } from '@/lib/dodoClient';
 import { captureEvent } from '@/lib/posthog';
 import { Webhook } from 'standardwebhooks';
@@ -43,6 +43,15 @@ interface WebhookPayload {
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if supabaseAdmin is available
+    if (!supabaseAdmin) {
+      console.error('Webhook error: supabaseAdmin not configured');
+      return NextResponse.json(
+        { error: 'Database configuration error' },
+        { status: 500 }
+      );
+    }
+
     // Get raw body for webhook verification
     const body = await request.text();
     
@@ -109,6 +118,8 @@ export async function POST(request: NextRequest) {
 }
 
 async function handleSubscriptionCreated(data: WebhookPayload['data']) {
+  if (!supabaseAdmin) return;
+  
   const { subscription } = data;
   if (!subscription) return;
 
@@ -120,7 +131,7 @@ async function handleSubscriptionCreated(data: WebhookPayload['data']) {
 
   try {
     // Get user email for tracking
-    const { data: user } = await supabase
+    const { data: user } = await supabaseAdmin
       .from('users')
       .select('email')
       .eq('id', userId)
@@ -129,7 +140,7 @@ async function handleSubscriptionCreated(data: WebhookPayload['data']) {
     const userEmail = user?.email || 'unknown';
 
     // Update user subscription status
-    await supabase
+    await supabaseAdmin
       .from('users')
       .update({
         is_paid: true,
@@ -141,7 +152,7 @@ async function handleSubscriptionCreated(data: WebhookPayload['data']) {
       .eq('id', userId);
 
     // Create or update subscription record
-    await supabase
+    await supabaseAdmin
       .from('subscriptions')
       .upsert({
         user_id: userId,
@@ -175,12 +186,14 @@ async function handleSubscriptionCreated(data: WebhookPayload['data']) {
 }
 
 async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
+  if (!supabaseAdmin) return;
+  
   const { subscription } = data;
   if (!subscription) return;
 
   try {
     // Update subscription record
-    await supabase
+    await supabaseAdmin
       .from('subscriptions')
       .update({
         current_period_start: subscription.current_period_start,
@@ -191,7 +204,7 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
       .eq('dodo_subscription_id', subscription.subscription_id);
 
     // Update user subscription end date
-    await supabase
+    await supabaseAdmin
       .from('users')
       .update({
         subscription_ends_at: subscription.current_period_end,
@@ -200,7 +213,7 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
       .eq('dodo_customer_id', subscription.customer_id);
 
     // Get user for tracking
-    const { data: user } = await supabase
+    const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id')
       .eq('dodo_customer_id', subscription.customer_id)
@@ -222,12 +235,14 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
 }
 
 async function handlePaymentSucceeded(data: WebhookPayload['data']) {
+  if (!supabaseAdmin) return;
+  
   const { payment } = data;
   if (!payment) return;
 
   try {
     // Get user for tracking
-    const { data: user } = await supabase
+    const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id')
       .eq('dodo_customer_id', payment.customer_id)
@@ -251,12 +266,14 @@ async function handlePaymentSucceeded(data: WebhookPayload['data']) {
 }
 
 async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
+  if (!supabaseAdmin) return;
+  
   const { subscription } = data;
   if (!subscription) return;
 
   try {
     // Update subscription status
-    await supabase
+    await supabaseAdmin
       .from('subscriptions')
       .update({
         status: 'canceled',
@@ -267,7 +284,7 @@ async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
 
     // If canceled immediately, update user status
     if (!subscription.cancel_at_period_end) {
-      await supabase
+      await supabaseAdmin
         .from('users')
         .update({
           is_paid: false,
@@ -278,7 +295,7 @@ async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
     }
 
     // Get user for tracking
-    const { data: user } = await supabase
+    const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id')
       .eq('dodo_customer_id', subscription.customer_id)
@@ -301,12 +318,14 @@ async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
 }
 
 async function handlePaymentFailed(data: WebhookPayload['data']) {
+  if (!supabaseAdmin) return;
+  
   const { payment } = data;
   if (!payment) return;
 
   try {
     // Get user for tracking
-    const { data: user } = await supabase
+    const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id')
       .eq('dodo_customer_id', payment.customer_id)

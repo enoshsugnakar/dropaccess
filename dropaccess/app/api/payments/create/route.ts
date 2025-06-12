@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabaseClient'; // Changed from supabase to supabaseAdmin
+import { supabaseAdmin } from '@/lib/supabaseClient';
 import dodoClient, { PRODUCT_CONFIG, PlanType } from '@/lib/dodoClient';
 import { captureEvent } from '@/lib/posthog';
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if supabaseAdmin is available
+    if (!supabaseAdmin) {
+      return NextResponse.json(
+        { error: 'Database configuration error' },
+        { status: 500 }
+      );
+    }
+
     const body = await request.json();
     const { plan, userId, userEmail } = body;
 

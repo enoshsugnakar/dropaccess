@@ -38,6 +38,7 @@ import {
   MousePointer,
   Settings
 } from "lucide-react"
+import { PricingButton } from '@/components/PricingButton'
 
 function HomePage() {
   const { user } = useAuth()
@@ -288,107 +289,49 @@ function HomePage() {
 
           <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
             {/* Free Plan */}
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
-              <div className="text-center mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Free</h3>
-                <div className="text-3xl font-bold text-gray-900 dark:text-white mb-2">$0</div>
-                <p className="text-gray-600 dark:text-gray-400 text-sm">Forever free</p>
-              </div>
-              <div className="space-y-3 mb-6">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">3 drops per month</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">3 recipients per drop</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">10MB file upload limit</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">Basic analytics</span>
-                </div>
-              </div>
-              <button className="w-full bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
-                Try it Out
-              </button>
-            </div>
+            <PricingButton 
+              plan="free"
+              planName="Free"
+              price="$0"
+              features={[
+                "3 drops per month",
+                "3 recipients per drop", 
+                "10MB file upload limit",
+                "Basic analytics"
+              ]}
+            />
 
             {/* Individual Plan - Featured */}
-            <div className="bg-primary rounded-xl p-6 text-white relative scale-105 shadow-xl">
-              <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                <div className="bg-white text-primary px-3 py-1 rounded-full text-xs font-semibold">
-                  MOST POPULAR
-                </div>
-              </div>
-              <div className="text-center mb-6 pt-2">
-                <h3 className="text-xl font-semibold mb-2">Individual</h3>
-                <div className="text-3xl font-bold mb-2">$9.99</div>
-                <p className="text-primary-foreground/80 text-sm">per month</p>
-              </div>
-              <div className="space-y-3 mb-6">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">15 drops per month</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">20 recipients per drop</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">300MB file limit</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">Custom time limits</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">Advanced analytics</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                  <span className="text-sm">Priority support</span>
-                </div>
-              </div>
-              <button className="w-full bg-white text-primary py-3 rounded-lg font-medium hover:bg-gray-100 transition-colors">
-                Start Pro Trial
-              </button>
-            </div>
+            <PricingButton 
+              plan="individual"
+              planName="Individual"
+              price="$9.99"
+              features={[
+                "15 drops per month",
+                "20 recipients per drop",
+                "300MB file limit", 
+                "Custom time limits",
+                "Advanced analytics",
+                "Priority support"
+              ]}
+              popular={true}
+            />
 
             {/* Business Plan */}
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
-              <div className="text-center mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Business</h3>
-                <div className="text-3xl font-bold text-gray-900 dark:text-white mb-2">$19.99</div>
-                <p className="text-gray-600 dark:text-gray-400 text-sm">per month</p>
-              </div>
-              <div className="space-y-3 mb-6">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">Unlimited drops</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">1GB file limit</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">Custom branding</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">500 recipients per drop</span>
-                </div>
-              </div>
-              <button className="w-full bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
-                Contact Sales
-              </button>
-            </div>
+            <PricingButton 
+              plan="business"
+              planName="Business"
+              price="$19.99"
+              features={[
+                "Unlimited drops",
+                "Unlimited recipients",
+                "Unlimited file size",
+                "Advanced analytics",
+                "Custom branding",
+                "Priority support",
+                "Team management"
+              ]}
+            />
           </div>
         </div>
       </section>
