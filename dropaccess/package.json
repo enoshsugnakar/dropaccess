@@ -37,6 +37,7 @@
     "react-hot-toast": "^2.4.1",
     "react-pdf": "^9.2.1",
     "resend": "^4.5.2",
+    "standardwebhooks": "^1.0.0",
     "tailwind-merge": "^2.3.0",
     "zod": "^3.23.0"
   },
