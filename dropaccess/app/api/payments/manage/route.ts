@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabaseClient'; // Changed to use admin client
+import { supabaseAdmin } from '@/lib/supabaseClient';
 import dodoClient, { PRODUCT_CONFIG, PlanType } from '@/lib/dodoClient';
 import { captureEvent } from '@/lib/posthog';
 
+// GET endpoint to fetch subscription data
 export async function GET(request: NextRequest) {
   try {
-    // Check if supabaseAdmin is available
     if (!supabaseAdmin) {
       return NextResponse.json(
         { error: 'Database configuration error' },
@@ -23,52 +23,49 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get user's current subscription (using admin client to bypass RLS)
-    const { data: subscription, error } = await supabaseAdmin
-      .from('subscriptions')
+    // Get user details
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('users')
       .select('*')
-      .eq('user_id', userId)
-      .eq('status', 'active')
+      .eq('id', userId)
       .single();
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-      console.error('Database error:', error);
+    if (userError) {
       return NextResponse.json(
-        { error: 'Database error' },
-        { status: 500 }
+        { error: 'User not found' },
+        { status: 404 }
       );
     }
 
-    if (!subscription) {
-      return NextResponse.json({
-        hasSubscription: false,
-        subscription: null
-      });
-    }
+    // Get subscription details - look for ANY subscription, not just active ones
+    const { data: subscription, error: subError } = await supabaseAdmin
+      .from('subscriptions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
 
-    // Get additional details from Dodo if needed
-    let dodoSubscription = null;
-    if (subscription.dodo_subscription_id) {
-      try {
-        dodoSubscription = await dodoClient.subscriptions.retrieve(
-          subscription.dodo_subscription_id
-        );
-      } catch (dodoError) {
-        console.error('Error fetching Dodo subscription:', dodoError);
-        // Continue without Dodo details
-      }
-    }
+    // Don't treat missing subscription as an error
+    const hasSubscription = !subError && subscription;
+
+    console.log('📊 Subscription check:', {
+      userId,
+      hasSubscription,
+      subscriptionStatus: subscription?.status,
+      userTier: user.subscription_tier,
+      subError: subError?.code
+    });
 
     return NextResponse.json({
-      hasSubscription: true,
-      subscription: {
-        ...subscription,
-        dodoDetails: dodoSubscription
-      }
+      user,
+      hasSubscription,
+      subscription: subscription || null,
+      subscription_error: subError?.code === 'PGRST116' ? null : subError
     });
 
   } catch (error: any) {
-    console.error('Subscription management error:', error);
+    console.error('Subscription GET error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -96,13 +93,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get current subscription (using admin client)
+    // Get current subscription - look for any subscription, not just active
     const { data: currentSubscription } = await supabaseAdmin
       .from('subscriptions')
       .select('*')
       .eq('user_id', userId)
-      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single();
+
+    console.log('🔧 Manage API called:', {
+      action,
+      userId,
+      hasSubscription: !!currentSubscription,
+      subscriptionStatus: currentSubscription?.status,
+      subscriptionPlan: currentSubscription?.plan
+    });
 
     switch (action) {
       case 'change_plan':
@@ -140,7 +146,7 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
 
   if (!currentSubscription) {
     return NextResponse.json(
-      { error: 'No active subscription found' },
+      { error: 'No subscription found. Please create a new subscription first.' },
       { status: 404 }
     );
   }
@@ -154,7 +160,71 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
 
   const newPlanConfig = PRODUCT_CONFIG[newPlan as PlanType];
 
+  // Check if this is a fake/simulated subscription
+  const isFakeSubscription = currentSubscription.dodo_subscription_id?.startsWith('real_') || 
+                            currentSubscription.dodo_subscription_id?.startsWith('debug_');
+
+  if (isFakeSubscription) {
+    console.log('🎭 Detected fake subscription, updating locally only');
+    
+    try {
+      // Update local subscription record only (no Dodo API call)
+      await supabaseAdmin
+        .from('subscriptions')
+        .update({
+          plan: newPlan,
+          dodo_product_id: newPlanConfig.productId,
+          price_cents: newPlanConfig.price,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', currentSubscription.id);
+
+      // Update user tier
+      await supabaseAdmin
+        .from('users')
+        .update({
+          subscription_tier: newPlan,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      // Track plan change
+      await captureEvent(userEmail, 'subscription_plan_changed', {
+        from_plan: currentSubscription.plan,
+        to_plan: newPlan,
+        subscription_id: currentSubscription.dodo_subscription_id,
+        user_id: userId,
+        method: 'local_simulation'
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: `Plan changed successfully from ${currentSubscription.plan} to ${newPlan} (simulated)`,
+        newPlan: newPlan,
+        simulation: true,
+        subscription: {
+          ...currentSubscription,
+          plan: newPlan,
+          price_cents: newPlanConfig.price
+        }
+      });
+
+    } catch (localError: any) {
+      console.error('Local plan change error:', localError);
+      return NextResponse.json(
+        { 
+          error: 'Failed to change plan locally',
+          details: localError.message
+        },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Real subscription - use Dodo API
   try {
+    console.log('🔄 Real subscription detected, using Dodo API');
+    
     // Use Dodo's change plan API with required proration_billing_mode
     const updatedSubscription = await dodoClient.subscriptions.changePlan(
       currentSubscription.dodo_subscription_id,
@@ -190,12 +260,13 @@ async function handlePlanChange(currentSubscription: any, newPlan: string, userI
       from_plan: currentSubscription.plan,
       to_plan: newPlan,
       subscription_id: currentSubscription.dodo_subscription_id,
-      user_id: userId
+      user_id: userId,
+      method: 'dodo_api'
     });
 
     return NextResponse.json({
       success: true,
-      message: 'Plan changed successfully',
+      message: 'Plan changed successfully via Dodo API',
       newPlan: newPlan,
       subscription: updatedSubscription
     });
@@ -230,12 +301,73 @@ async function handleCancellation(currentSubscription: any, userId: string, user
 
   if (!currentSubscription) {
     return NextResponse.json(
-      { error: 'No active subscription found' },
+      { error: 'No subscription found to cancel' },
       { status: 404 }
     );
   }
 
+  // Check if this is a fake/simulated subscription
+  const isFakeSubscription = currentSubscription.dodo_subscription_id?.startsWith('real_') || 
+                            currentSubscription.dodo_subscription_id?.startsWith('debug_');
+
+  if (isFakeSubscription) {
+    console.log('🎭 Detected fake subscription, canceling locally only');
+    
+    try {
+      // Update local subscription record only
+      await supabaseAdmin
+        .from('subscriptions')
+        .update({
+          cancel_at_period_end: true,
+          status: 'canceled',
+          canceled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', currentSubscription.id);
+
+      // Update user status immediately for simulation
+      await supabaseAdmin
+        .from('users')
+        .update({
+          is_paid: false,
+          subscription_status: 'canceled',
+          subscription_tier: 'free',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      // Track cancellation
+      await captureEvent(userEmail, 'subscription_canceled', {
+        plan: currentSubscription.plan,
+        subscription_id: currentSubscription.dodo_subscription_id,
+        cancel_at_period_end: true,
+        user_id: userId,
+        method: 'local_simulation'
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Subscription canceled successfully (simulated)',
+        cancelAtPeriodEnd: true,
+        simulation: true
+      });
+
+    } catch (localError: any) {
+      console.error('Local cancellation error:', localError);
+      return NextResponse.json(
+        { 
+          error: 'Failed to cancel subscription locally',
+          details: localError.message
+        },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Real subscription - use Dodo API
   try {
+    console.log('🔄 Real subscription detected, using Dodo API for cancellation');
+    
     // Update subscription status to cancelled using the update method
     const canceledSubscription = await dodoClient.subscriptions.update(
       currentSubscription.dodo_subscription_id,
@@ -261,7 +393,8 @@ async function handleCancellation(currentSubscription: any, userId: string, user
       plan: currentSubscription.plan,
       subscription_id: currentSubscription.dodo_subscription_id,
       cancel_at_period_end: true,
-      user_id: userId
+      user_id: userId,
+      method: 'dodo_api'
     });
 
     return NextResponse.json({
@@ -299,12 +432,76 @@ async function handleReactivation(currentSubscription: any, userId: string, user
 
   if (!currentSubscription) {
     return NextResponse.json(
-      { error: 'No subscription found' },
+      { error: 'No subscription found to reactivate' },
       { status: 404 }
     );
   }
 
+  // Check if this is a fake/simulated subscription
+  const isFakeSubscription = currentSubscription.dodo_subscription_id?.startsWith('real_') || 
+                            currentSubscription.dodo_subscription_id?.startsWith('debug_');
+
+  if (isFakeSubscription) {
+    console.log('🎭 Detected fake subscription, reactivating locally only');
+    
+    try {
+      // Update local subscription record only
+      await supabaseAdmin
+        .from('subscriptions')
+        .update({
+          cancel_at_period_end: false,
+          status: 'active',
+          canceled_at: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', currentSubscription.id);
+
+      // Reactivate user status
+      await supabaseAdmin
+        .from('users')
+        .update({
+          is_paid: true,
+          subscription_status: 'active',
+          subscription_tier: currentSubscription.plan,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      // Track reactivation
+      await captureEvent(userEmail, 'subscription_reactivated', {
+        plan: currentSubscription.plan,
+        subscription_id: currentSubscription.dodo_subscription_id,
+        user_id: userId,
+        method: 'local_simulation'
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Subscription reactivated successfully (simulated)',
+        simulation: true,
+        subscription: {
+          ...currentSubscription,
+          status: 'active',
+          cancel_at_period_end: false
+        }
+      });
+
+    } catch (localError: any) {
+      console.error('Local reactivation error:', localError);
+      return NextResponse.json(
+        { 
+          error: 'Failed to reactivate subscription locally',
+          details: localError.message
+        },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Real subscription - use Dodo API
   try {
+    console.log('🔄 Real subscription detected, using Dodo API for reactivation');
+    
     // Reactivate subscription by updating metadata to remove cancellation
     const reactivatedSubscription = await dodoClient.subscriptions.update(
       currentSubscription.dodo_subscription_id,
@@ -331,7 +528,8 @@ async function handleReactivation(currentSubscription: any, userId: string, user
     await captureEvent(userEmail, 'subscription_reactivated', {
       plan: currentSubscription.plan,
       subscription_id: currentSubscription.dodo_subscription_id,
-      user_id: userId
+      user_id: userId,
+      method: 'dodo_api'
     });
 
     return NextResponse.json({

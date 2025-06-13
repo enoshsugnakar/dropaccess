@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { updateUsageAfterDrop } from "@/lib/usageTracking";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -335,6 +336,35 @@ export function DropForm() {
           throw new Error(`File upload failed: ${(fileError as Error).message || 'Unknown error'}`);
         }
       }
+
+      console.log("Drop created successfully:", insertedDrop);
+
+      // ===== ADD THIS USAGE TRACKING CODE HERE =====
+      try {
+        // Calculate file size in MB if it's a file drop
+        const fileSizeMb = formData.dropType === "file" && uploadedFile 
+          ? uploadedFile.size / (1024 * 1024) 
+          : 0;
+
+        // Get recipient count
+        const recipientEmails = formData.recipients
+          .split(/[,\n]/)
+          .map((email) => email.trim())
+          .filter((email) => email.length > 0);
+
+        // Track usage
+        await updateUsageAfterDrop(user.id, recipientEmails.length, fileSizeMb);
+        console.log("✅ Usage tracked successfully:", {
+          userId: user.id,
+          recipientCount: recipientEmails.length,
+          fileSizeMb: Math.round(fileSizeMb * 100) / 100
+        });
+      } catch (usageError) {
+        console.error("❌ Failed to track usage (non-critical):", usageError);
+        // Don't fail the drop creation if usage tracking fails
+      }
+      // ===== END USAGE TRACKING CODE =====
+
 
       // Process recipients
       const recipientEmails = formData.recipients

@@ -36,20 +36,33 @@ export async function POST(request: NextRequest) {
 
     if (!user.dodo_customer_id) {
       return NextResponse.json(
-        { error: 'No billing account found' },
+        { error: 'No billing account found. Please complete a payment first.' },
         { status: 404 }
       )
     }
 
-    // Create billing portal session with Dodo
-    const portalSession = await dodoClient.billing_portal.create({
-      customer_id: user.dodo_customer_id,
-      return_url: returnUrl || `${process.env.NEXT_PUBLIC_APP_URL}/settings`
-    })
+    try {
+      // Create customer portal session using correct DodoPayments API
+      const customerPortalSession = await dodoClient.customers.customerPortal.create(
+        user.dodo_customer_id
+      )
 
-    return NextResponse.json({
-      portal_url: portalSession.url
-    })
+      return NextResponse.json({
+        portal_url: customerPortalSession.link,
+        success: true
+      })
+
+    } catch (dodoError: any) {
+      console.error('Dodo customer portal creation failed:', dodoError)
+      
+      return NextResponse.json(
+        { 
+          error: 'Failed to create billing portal session',
+          details: dodoError.message || 'Unknown error from DodoPayments'
+        },
+        { status: 500 }
+      )
+    }
 
   } catch (error: any) {
     console.error('Billing portal error:', error)

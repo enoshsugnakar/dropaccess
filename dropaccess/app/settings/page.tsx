@@ -35,6 +35,7 @@ interface SettingsContextType {
   refreshData: () => Promise<void>
   loading: boolean
   profileData: any
+  handleUpgrade: (planName: string) => Promise<void>
 }
 
 const SettingsContext = createContext<SettingsContextType | null>(null)
@@ -108,7 +109,7 @@ function ProfileAndAccountTab() {
 if (loading || !profileData) {
   return (
     <Card>
-      <CardContent className="flex items-center justify-center py-8">
+      <CardContent className="flex items-center justify-center py-8 mt-8">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </CardContent>
     </Card>
@@ -232,7 +233,7 @@ if (loading || !profileData) {
 
 // Subscription and Plans Tab Component
 function SubscriptionAndPlansTab() {
-  const { userTier, usageData, subscriptionData, loading } = useSettingsContext()
+  const { userTier, usageData, subscriptionData, loading, handleUpgrade } = useSettingsContext()
   const { user } = useAuth()
 
   const handleBillingPortal = async () => {
@@ -260,38 +261,6 @@ function SubscriptionAndPlansTab() {
   } catch (error) {
     console.error('Error opening billing portal:', error)
     toast.error('Unable to access billing portal. Please try again.')
-  }
-}
-  const handleUpgrade = async (planName: string) => {
-  try {
-    const response = await fetch('/api/payments/create', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        plan: planName.toLowerCase(),
-        userId: user!.id,
-        userEmail: user!.email
-      }),
-    })
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to create payment link')
-    }
-
-    // Redirect to Dodo payment page
-    if (data.payment_link) {
-      window.location.href = data.payment_link
-    } else {
-      throw new Error('No payment link received')
-    }
-
-  } catch (err: any) {
-    console.error('Payment error:', err)
-    toast.error(err.message || 'Something went wrong')
   }
 }
 
@@ -647,7 +616,7 @@ function SecurityAndPrivacyTab() {
 
 // Customization Tab Component
 function CustomizationTab() {
-  const { userTier } = useSettingsContext()
+  const { userTier, handleUpgrade } = useSettingsContext()
   const hasAccess = userTier === 'business'
   
   if (!hasAccess) {
@@ -746,6 +715,39 @@ export default function SettingsPage() {
     }
   }, [user?.id])
 
+  const handleUpgrade = async (planName: string) => {
+    try {
+      const response = await fetch('/api/payments/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          plan: planName.toLowerCase(),
+          userId: user!.id,
+          userEmail: user!.email
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create payment link')
+      }
+
+      // Redirect to Dodo payment page
+      if (data.payment_link) {
+        window.location.href = data.payment_link
+      } else {
+        throw new Error('No payment link received')
+      }
+
+    } catch (err: any) {
+      console.error('Payment error:', err)
+      toast.error(err.message || 'Something went wrong')
+    }
+  }
+
   const navigationItems: SettingsNavItem[] = [
     {
       id: 'profile',
@@ -790,7 +792,8 @@ export default function SettingsPage() {
     subscriptionData,
     profileData,
     refreshData: fetchSettingsData,
-    loading
+    loading,
+    handleUpgrade
   }
 
   const renderTabContent = () => {
@@ -811,7 +814,7 @@ export default function SettingsPage() {
   return (
     <ClientAuthWrapper>
       <SettingsContext.Provider value={settingsContextValue}>
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 mt-8 sm:mt:4">
           <Navbar />
           
           <div className="pt-16 pb-8">

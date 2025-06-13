@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user already has an active subscription
+    // Check for existing subscription
     const { data: existingSubscription } = await supabaseAdmin
       .from('subscriptions')
       .select('*')
@@ -56,11 +56,76 @@ export async function POST(request: NextRequest) {
       .eq('status', 'active')
       .single();
 
+    // If user has existing subscription, handle plan change
     if (existingSubscription) {
-      return NextResponse.json(
-        { error: 'User already has an active subscription' },
-        { status: 409 }
-      );
+      // Check if they're trying to subscribe to the same plan
+      if (existingSubscription.plan === plan) {
+        return NextResponse.json(
+          { error: `You already have an active ${plan} subscription` },
+          { status: 409 }
+        );
+      }
+
+      console.log(`🔄 User ${userId} wants to change from ${existingSubscription.plan} to ${plan}`);
+
+      // For plan changes, use the subscription management API
+      try {
+        const planChangeResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/payments/manage`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            action: 'change_plan',
+            userId,
+            userEmail,
+            newPlan: plan
+          })
+        });
+
+        const planChangeResult = await planChangeResponse.json();
+
+        if (planChangeResponse.ok) {
+          // Track plan change initiation
+          await captureEvent(userEmail, 'plan_change_initiated', {
+            from_plan: existingSubscription.plan,
+            to_plan: plan,
+            user_id: userId,
+            method: 'direct_change'
+          });
+
+          return NextResponse.json({
+            success: true,
+            message: `Plan changed successfully from ${existingSubscription.plan} to ${plan}`,
+            plan_change: true,
+            from_plan: existingSubscription.plan,
+            to_plan: plan,
+            subscription: planChangeResult.subscription
+          });
+        } else {
+          // If direct plan change fails, fall back to cancel and recreate
+          console.warn('⚠️ Direct plan change failed, falling back to cancel and recreate');
+          
+          // Cancel current subscription
+          await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/payments/manage`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              action: 'cancel',
+              userId,
+              userEmail
+            })
+          });
+
+          // Continue to create new subscription below
+          console.log('🔄 Creating new subscription after cancellation');
+        }
+      } catch (planChangeError) {
+        console.error('❌ Plan change failed:', planChangeError);
+        // Continue to create new subscription as fallback
+      }
     }
 
     // Track payment initiation
@@ -68,7 +133,8 @@ export async function POST(request: NextRequest) {
       plan,
       product_id: planConfig.productId,
       price_cents: planConfig.price,
-      user_id: userId
+      user_id: userId,
+      is_plan_change: !!existingSubscription
     });
 
     try {
@@ -110,7 +176,9 @@ export async function POST(request: NextRequest) {
         metadata: {
           user_id: userId,
           plan: plan,
-          app_name: 'DropAccess'
+          app_name: 'DropAccess',
+          is_plan_change: existingSubscription ? 'true' : 'false',
+          previous_plan: existingSubscription?.plan || 'none'
         }
       });
 
@@ -120,7 +188,9 @@ export async function POST(request: NextRequest) {
         subscription_id: subscription.subscription_id,
         payment_link: subscription.payment_link,
         dodo_customer_id: dodoCustomerId,
-        user_id: userId
+        user_id: userId,
+        is_plan_change: !!existingSubscription,
+        previous_plan: existingSubscription?.plan
       });
 
       return NextResponse.json({
@@ -128,7 +198,11 @@ export async function POST(request: NextRequest) {
         payment_link: subscription.payment_link,
         subscription_id: subscription.subscription_id,
         plan: plan,
-        amount: planConfig.price
+        amount: planConfig.price,
+        is_plan_change: !!existingSubscription,
+        message: existingSubscription 
+          ? `Creating payment link to change from ${existingSubscription.plan} to ${plan}` 
+          : `Creating payment link for ${plan} subscription`
       });
 
     } catch (dodoError: any) {
@@ -139,7 +213,8 @@ export async function POST(request: NextRequest) {
         plan,
         error_message: dodoError.message || 'Unknown Dodo error',
         error_type: 'dodo_api_error',
-        user_id: userId
+        user_id: userId,
+        is_plan_change: !!existingSubscription
       });
 
       return NextResponse.json(

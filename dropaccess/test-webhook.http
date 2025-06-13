@@ -1,0 +1,13 @@
+### Variables
+@baseUrl = http://localhost:3000
+@userId = 3da1add6-33c2-427d-8bd6-b42753f06324
+@userEmail = doomdragon.xx@gmail.com
+
+POST {{baseUrl}}/api/payments/create
+Content-Type: application/json
+
+{
+  "plan": "business",
+  "userId": "{{userId}}",
+  "userEmail": "{{userEmail}}"
+}
