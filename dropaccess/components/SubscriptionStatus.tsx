@@ -5,8 +5,6 @@ import { useAuth } from '@/components/AuthProvider'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
-// Remove the collapsible import - we'll use custom implementation
 import { 
   Crown, 
   TrendingUp, 
@@ -213,7 +211,7 @@ export function SubscriptionStatus() {
 
   if (loading) {
     return (
-      <div className="my-6">
+      <div className="my-8">
         <Card className="w-full">
           <CardHeader>
             <div className="flex items-center space-x-2">
@@ -228,7 +226,7 @@ export function SubscriptionStatus() {
 
   if (error) {
     return (
-      <div className="my-6">
+      <div className="my-8">
         <Card className="w-full border-red-200">
           <CardHeader>
             <CardTitle className="text-red-600 flex items-center">
@@ -307,151 +305,159 @@ export function SubscriptionStatus() {
         
         {isOpen && (
           <CardContent className="pt-0 space-y-6">
-              {/* Usage Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Drops Usage */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-gray-600" />
-                      <span className="text-sm font-medium">Drops This Month</span>
-                    </div>
-                    <span className="text-sm text-gray-600">
-                      {usageSummary.monthly.drops_created} / {usageSummary.limits.drops === -1 ? '∞' : usageSummary.limits.drops}
-                    </span>
+            {/* Usage Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Drops Usage */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-gray-600" />
+                    <span className="text-sm font-medium">Drops This Month</span>
                   </div>
-                  <Progress 
-                    value={dropsPercentage} 
-                    className="h-2"
-                    indicatorClassName={getProgressColor(dropsPercentage)}
-                  />
-                  <p className={`text-xs font-medium ${getUsageColor(dropsPercentage)}`}>
-                    {dropsPercentage}% of monthly limit used
-                  </p>
+                  <span className="text-sm text-gray-600">
+                    {usageSummary.monthly.drops_created} / {usageSummary.limits.drops === -1 ? '∞' : usageSummary.limits.drops}
+                  </span>
                 </div>
-
-                {/* Storage Usage */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Database className="w-4 h-4 text-gray-600" />
-                      <span className="text-sm font-medium">Storage Used</span>
-                    </div>
-                    <span className="text-sm text-gray-600">
-                      {formatStorageSize(usageSummary.monthly.storage_used_mb)} / {usageSummary.limits.storage === -1 ? '∞' : formatStorageSize(usageSummary.limits.storage)}
-                    </span>
-                  </div>
-                  <Progress 
-                    value={storagePercentage} 
-                    className="h-2"
-                    indicatorClassName={getProgressColor(storagePercentage)}
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="h-2 rounded-full transition-all duration-300"
+                    style={{ 
+                      width: `${Math.min(100, dropsPercentage)}%`,
+                      backgroundColor: getProgressColor(dropsPercentage)
+                    }}
                   />
-                  <p className={`text-xs font-medium ${getUsageColor(storagePercentage)}`}>
-                    {storagePercentage}% of storage limit used
-                  </p>
                 </div>
+                <p className={`text-xs font-medium ${getUsageColor(dropsPercentage)}`}>
+                  {dropsPercentage}% of monthly limit used
+                </p>
               </div>
 
-              {/* Plan Features */}
-              <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
-                <h4 className="font-medium text-gray-900 dark:text-white mb-3">Current Plan Features</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="flex items-center space-x-2">
-                    <FileText className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm">
-                      Drops per month: {usageSummary.limits.drops === -1 ? 'Unlimited' : usageSummary.limits.drops}
-                    </span>
+              {/* Storage Usage */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-gray-600" />
+                    <span className="text-sm font-medium">Storage Used</span>
                   </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Users className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm">
-                      Recipients per drop: {usageSummary.limits.recipients === -1 ? 'Unlimited' : usageSummary.limits.recipients}
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Database className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm">
-                      File size limit: {currentTier === 'free' ? '10MB' : currentTier === 'individual' ? '300MB' : 'Unlimited'}
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <TrendingUp className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm">
-                      Analytics: {currentTier === 'free' ? 'Basic' : currentTier === 'individual' ? 'Advanced' : 'Premium'}
-                    </span>
-                  </div>
-                  
-                  {/* Only show custom branding for business plan */}
-                  {currentTier === 'business' && (
-                    <div className="flex items-center space-x-2">
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                      <span className="text-sm">
-                        Custom branding
-                      </span>
-                    </div>
-                  )}
-                  
-                  {/* Show priority support for paid plans */}
-                  {isPaidPlan && (
-                    <div className="flex items-center space-x-2">
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                      <span className="text-sm">
-                        Priority support
-                      </span>
-                    </div>
-                  )}
+                  <span className="text-sm text-gray-600">
+                    {formatStorageSize(usageSummary.monthly.storage_used_mb)} / {usageSummary.limits.storage === -1 ? '∞' : formatStorageSize(usageSummary.limits.storage)}
+                  </span>
                 </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="h-2 rounded-full transition-all duration-300"
+                    style={{ 
+                      width: `${Math.min(100, storagePercentage)}%`,
+                      backgroundColor: getProgressColor(storagePercentage)
+                    }}
+                  />
+                </div>
+                <p className={`text-xs font-medium ${getUsageColor(storagePercentage)}`}>
+                  {storagePercentage}% of storage limit used
+                </p>
               </div>
+            </div>
 
-              {/* Upgrade Banner for Free Users */}
-              {isFreePlan && (dropsPercentage > 70 || storagePercentage > 70) && (
-                <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-                  <div className="flex items-start space-x-3">
-                    <div className="flex-shrink-0">
-                      <TrendingUp className="w-5 h-5 text-blue-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                        Approaching Limits
-                      </h4>
-                      <p className="text-sm text-blue-700 dark:text-blue-200 mt-1">
-                        You're running low on your monthly allowance. Upgrade to Individual for 15 drops/month and 300MB files.
-                      </p>
-                      <Button onClick={handleUpgrade} size="sm" className="mt-3">
-                        <Crown className="w-4 h-4 mr-2" />
-                        Upgrade Now
-                      </Button>
-                    </div>
-                  </div>
+            {/* Plan Features */}
+            <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
+              <h4 className="font-medium text-gray-900 dark:text-white mb-3">Current Plan Features</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="flex items-center space-x-2">
+                  <FileText className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm">
+                    Drops per month: {usageSummary.limits.drops === -1 ? 'Unlimited' : usageSummary.limits.drops}
+                  </span>
                 </div>
-              )}
+                
+                <div className="flex items-center space-x-2">
+                  <Users className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm">
+                    Recipients per drop: {usageSummary.limits.recipients === -1 ? 'Unlimited' : usageSummary.limits.recipients}
+                  </span>
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <Database className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm">
+                    File size limit: {currentTier === 'free' ? '10MB' : currentTier === 'individual' ? '300MB' : 'Unlimited'}
+                  </span>
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <TrendingUp className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm">
+                    Analytics: {currentTier === 'free' ? 'Basic' : currentTier === 'individual' ? 'Advanced' : 'Premium'}
+                  </span>
+                </div>
+                
+                {/* Only show custom branding for business plan */}
+                {currentTier === 'business' && (
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    <span className="text-sm">
+                      Custom branding
+                    </span>
+                  </div>
+                )}
+                
+                {/* Show priority support for paid plans */}
+                {isPaidPlan && (
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    <span className="text-sm">
+                      Priority support
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
 
-              {/* Billing Info for Paid Users */}
-              {isPaidPlan && subscriptionData?.subscription && (
-                <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium text-gray-900 dark:text-white">Next Billing</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        {subscriptionData.subscription.current_period_end ? 
-                          new Date(subscriptionData.subscription.current_period_end).toLocaleDateString() : 
-                          'Loading...'
-                        }
-                      </p>
-                    </div>
-                    <Button onClick={handleManageBilling} variant="outline" size="sm">
-                      <CreditCard className="w-4 h-4 mr-2" />
-                      Billing Portal
+            {/* Upgrade Banner for Free Users */}
+            {isFreePlan && (dropsPercentage > 70 || storagePercentage > 70) && (
+              <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0">
+                    <TrendingUp className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      Approaching Limits
+                    </h4>
+                    <p className="text-sm text-blue-700 dark:text-blue-200 mt-1">
+                      You're running low on your monthly allowance. Upgrade to Individual for 15 drops/month and 300MB files.
+                    </p>
+                    <Button onClick={handleUpgrade} size="sm" className="mt-3">
+                      <Crown className="w-4 h-4 mr-2" />
+                      Upgrade Now
                     </Button>
                   </div>
                 </div>
-              )}
-            </CardContent>
-          )}
-        </Card>
-      </div>
-    )
-  }
+              </div>
+            )}
+
+            {/* Billing Info for Paid Users */}
+            {isPaidPlan && subscriptionData?.subscription && (
+              <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-gray-900 dark:text-white">Next Billing</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {subscriptionData.subscription.current_period_end ? 
+                        new Date(subscriptionData.subscription.current_period_end).toLocaleDateString() : 
+                        'Loading...'
+                      }
+                    </p>
+                  </div>
+                  <Button onClick={handleManageBilling} variant="outline" size="sm">
+                    <CreditCard className="w-4 h-4 mr-2" />
+                    Billing Portal
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
+    </div>
+  )
+}
