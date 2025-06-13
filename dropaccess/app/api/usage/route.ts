@@ -1,6 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseClient'
 
+// Your exact plan limits from the documentation
+const PLAN_LIMITS = {
+  free: {
+    drops: 3,
+    recipients: 3,
+    storage: 30, // 3 drops × 10MB
+    file_size_mb: 10
+  },
+  individual: {
+    drops: 15,
+    recipients: 20,
+    storage: 4500, // 15 drops × 300MB
+    file_size_mb: 300
+  },
+  business: {
+    drops: -1, // Unlimited
+    recipients: -1, // Unlimited
+    storage: -1, // Unlimited
+    file_size_mb: -1 // Unlimited
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Check if supabaseAdmin is available
@@ -86,15 +108,9 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Define limits based on subscription tier
-    const limits = {
-      free: { drops: 5, recipients: 10, storage: 100 },
-      basic: { drops: 50, recipients: 100, storage: 1000 },
-      pro: { drops: 200, recipients: 500, storage: 5000 },
-      enterprise: { drops: -1, recipients: -1, storage: -1 } // Unlimited
-    }
-
-    const currentLimits = limits[user.subscription_tier as keyof typeof limits] || limits.free
+    // Get the correct limits for the user's tier
+    const userTier = user.subscription_tier || 'free'
+    const currentLimits = PLAN_LIMITS[userTier as keyof typeof PLAN_LIMITS] || PLAN_LIMITS.free
 
     return NextResponse.json({
       monthly: {
@@ -113,8 +129,8 @@ export async function GET(request: NextRequest) {
       },
       limits: currentLimits,
       subscription: {
-        tier: user.subscription_tier,
-        status: user.subscription_status
+        tier: user.subscription_tier || 'free',
+        status: user.subscription_status || 'free'
       }
     })
 
