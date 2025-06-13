@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+// Remove the collapsible import - we'll use custom implementation
 import { 
   Crown, 
   TrendingUp, 
@@ -178,9 +178,9 @@ export function SubscriptionStatus() {
   }
 
   const getProgressColor = (percentage: number): string => {
-    if (percentage >= 90) return 'bg-red-500'
-    if (percentage >= 75) return 'bg-yellow-500'
-    return 'bg-blue-500'
+    if (percentage >= 90) return '#ef4444' // red-500
+    if (percentage >= 75) return '#eab308' // yellow-500
+    return '#3b82f6' // blue-500
   }
 
   const handleUpgrade = () => {
@@ -258,48 +258,55 @@ export function SubscriptionStatus() {
 
   return (
     <div className="my-8">
-      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <Card className="w-full shadow-sm border-gray-200 dark:border-gray-700">
-          <CollapsibleTrigger asChild>
-            <CardHeader className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  {planInfo && (
-                    <>
-                      <div className={`p-2 rounded-lg ${planInfo.color}`}>
-                        <planInfo.icon className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <CardTitle className="flex items-center gap-2">
-                          {planInfo.name} Plan
-                          <Badge className={planInfo.color}>
-                            {usageSummary.subscription.status}
-                          </Badge>
-                        </CardTitle>
-                        <CardDescription>{planInfo.price}</CardDescription>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="flex items-center space-x-2">
-                  {!isPaidPlan && (
-                    <Button onClick={handleUpgrade} size="sm" className="mr-2">
-                      <Crown className="w-4 h-4 mr-2" />
-                      Upgrade
-                    </Button>
-                  )}
-                  {isOpen ? (
-                    <ChevronUp className="w-5 h-5 text-gray-500" />
-                  ) : (
-                    <ChevronDown className="w-5 h-5 text-gray-500" />
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-          </CollapsibleTrigger>
-          
-          <CollapsibleContent>
-            <CardContent className="pt-0 space-y-6">
+      <Card className="w-full shadow-sm border-gray-200 dark:border-gray-700">
+        <CardHeader 
+          className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              {planInfo && (
+                <>
+                  <div className={`p-2 rounded-lg ${planInfo.color}`}>
+                    <planInfo.icon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      {planInfo.name} Plan
+                      <Badge className={planInfo.color}>
+                        {usageSummary.subscription.status}
+                      </Badge>
+                    </CardTitle>
+                    <CardDescription>{planInfo.price}</CardDescription>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex items-center space-x-2">
+              {!isPaidPlan && (
+                <Button 
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleUpgrade()
+                  }} 
+                  size="sm" 
+                  className="mr-2"
+                >
+                  <Crown className="w-4 h-4 mr-2" />
+                  Upgrade
+                </Button>
+              )}
+              {isOpen ? (
+                <ChevronUp className="w-5 h-5 text-gray-500" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-gray-500" />
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        
+        {isOpen && (
+          <CardContent className="pt-0 space-y-6">
               {/* Usage Stats */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Drops Usage */}
@@ -443,9 +450,8 @@ export function SubscriptionStatus() {
                 </div>
               )}
             </CardContent>
-          </CollapsibleContent>
+          )}
         </Card>
-      </Collapsible>
-    </div>
-  )
-}
+      </div>
+    )
+  }
