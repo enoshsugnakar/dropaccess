@@ -17,7 +17,8 @@ export async function POST(request: NextRequest) {
       dropId: requestDropId, 
       recipientEmails, 
       dropData, 
-      creatorEmail: requestCreatorEmail 
+      creatorEmail: requestCreatorEmail,
+      creatorDisplayName 
     } = body;
 
     // Store for tracking
@@ -113,16 +114,17 @@ export async function POST(request: NextRequest) {
         const { data, error } = await resend.emails.send({
           from: 'DropAccess <noreply@app.dropaccess.net>', // Update with your verified domain
           to: [email.trim()],
-          subject: `You've received a secure drop: ${dropData.name}`,
+          subject: `🔐 ${dropData.name} - Secure drop from ${body.creatorDisplayName || body.creatorEmail.split('@')[0]}`,
           react: DropNotificationEmail({
             dropName: dropData.name,
             dropDescription: dropData.description,
             creatorEmail: creatorEmail,
+            creatorDisplayName: body.creatorDisplayName, // Add this line
             accessLink: accessLink,
             timerMode: timerMode,
             expiryInfo: expiryInfo
           }),
-        });
+        }); 
 
         const emailSendDuration = Date.now() - emailSendStartTime;
 

@@ -763,78 +763,183 @@ export default function DropAccessPage() {
     }
   };
 
-  const verifyEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Replace the verifyEmail function with this debug version:
 
-    if (!email.trim()) {
-      toast.error("Please enter your email");
+const verifyEmail = async (e: React.FormEvent) => {
+  e.preventDefault();
+
+  if (!email.trim()) {
+    toast.error("Please enter your email");
+    return;
+  }
+
+  setVerifying(true);
+  setError(""); // Clear previous errors
+
+  try {
+    const trimmedEmail = email.toLowerCase().trim();
+    
+    // DEBUG: Log basic info
+    console.log("=== VERIFICATION DEBUG START ===");
+    console.log("Drop ID:", dropId);
+    console.log("Email entered:", email);
+    console.log("Trimmed email:", trimmedEmail);
+    console.log("Drop data:", dropData);
+
+    // Check if we have drop data
+    if (!dropData) {
+      console.log("ERROR: No drop data available");
+      setError("Drop not found");
+      setVerifying(false);
       return;
     }
 
-    setVerifying(true);
+    console.log("Drop is active:", dropData.is_active);
+    console.log("Drop type:", dropData.drop_type);
 
-    try {
-      const { data: recipient, error: recipientError } = await supabase
-        .from("drop_recipients")
-        .select("*")
-        .eq("drop_id", dropId)
-        .eq("email", email.toLowerCase().trim())
-        .single();
+    // DEBUG: Check all recipients for this drop
+    console.log("--- Checking all recipients ---");
+    const { data: allRecipients, error: allRecipientsError } = await supabase
+      .from("drop_recipients")
+      .select("*")
+      .eq("drop_id", dropId);
 
-      if (recipientError || !recipient) {
-        setError("You do not have permission to access this drop");
+    console.log("All recipients query error:", allRecipientsError);
+    console.log("All recipients found:", allRecipients);
+    
+    if (allRecipientsError) {
+      console.log("ERROR: Failed to fetch recipients:", allRecipientsError);
+      setError(`Database error: ${allRecipientsError.message}`);
+      setVerifying(false);
+      return;
+    }
+
+    if (!allRecipients || allRecipients.length === 0) {
+      console.log("ERROR: No recipients found for this drop");
+      setError("No recipients configured for this drop");
+      setVerifying(false);
+      return;
+    }
+
+    console.log("Recipients emails:", allRecipients.map(r => `"${r.email}"`));
+
+    // DEBUG: Try exact match first
+    console.log("--- Trying exact match ---");
+    const exactMatch = allRecipients.find(r => r.email === trimmedEmail);
+    console.log("Exact match found:", exactMatch);
+
+    // DEBUG: Try case-insensitive match
+    console.log("--- Trying case-insensitive match ---");
+    const caseInsensitiveMatch = allRecipients.find(r => 
+      r.email.toLowerCase().trim() === trimmedEmail
+    );
+    console.log("Case-insensitive match found:", caseInsensitiveMatch);
+
+    // Use whichever match we found
+    const recipient = exactMatch || caseInsensitiveMatch;
+
+    if (!recipient) {
+      console.log("ERROR: No matching recipient found");
+      console.log("Looking for:", `"${trimmedEmail}"`);
+      console.log("Available emails:", allRecipients.map(r => `"${r.email}"`));
+      setError(`Email "${trimmedEmail}" not found in recipient list. Available: ${allRecipients.map(r => r.email).join(', ')}`);
+      setVerifying(false);
+      return;
+    }
+
+    console.log("SUCCESS: Found matching recipient:", recipient);
+
+    // DEBUG: Check expiry logic
+    console.log("--- Checking expiry logic ---");
+    const now = new Date();
+    console.log("Current time:", now.toISOString());
+
+    if (dropData.expires_at) {
+      const expiryDate = new Date(dropData.expires_at);
+      console.log("Drop expires at:", expiryDate.toISOString());
+      console.log("Is expired:", expiryDate < now);
+      
+      if (expiryDate < now) {
+        setError("This drop has expired");
         setVerifying(false);
         return;
       }
+    }
 
-      const verifiedAt = new Date();
-      let personalExpiry: Date | undefined = undefined;
-      let sessionExpiry: Date | undefined = undefined;
-
-      if (dropData?.expires_at) {
-        personalExpiry = new Date(dropData.expires_at);
-        sessionExpiry = personalExpiry;
-      } else if (dropData?.default_time_limit_hours) {
-        if (!recipient.verified_at) {
-          personalExpiry = new Date(verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000);
-          sessionExpiry = personalExpiry;
-        } else {
-          if (recipient.personal_expires_at) {
-            personalExpiry = new Date(recipient.personal_expires_at);
-            sessionExpiry = personalExpiry;
-          } else {
-            personalExpiry = new Date(verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000);
-            sessionExpiry = personalExpiry;
-          }
-        }
+    if (dropData.default_time_limit_hours && recipient.personal_expires_at) {
+      const personalExpiry = new Date(recipient.personal_expires_at);
+      console.log("Personal expires at:", personalExpiry.toISOString());
+      console.log("Personal access expired:", personalExpiry < now);
+      
+      if (personalExpiry < now) {
+        setError("Your access to this drop has expired");
+        setVerifying(false);
+        return;
       }
+    }
 
-      setPersonalExpiresAt(personalExpiry);
+    // DEBUG: Update recipient
+    console.log("--- Updating recipient record ---");
+    const verifiedAt = new Date();
+    let personalExpiry: Date | undefined = undefined;
 
-      if (dropData?.default_time_limit_hours && !recipient.verified_at) {
-        await supabase
-          .from("drop_recipients")
-          .update({
-            verified_at: verifiedAt.toISOString(),
-            personal_expires_at: personalExpiry?.toISOString() ?? undefined,
-          })
-          .eq("id", recipient.id);
+    // Calculate new expiry if needed
+    if (dropData.expires_at) {
+      personalExpiry = new Date(dropData.expires_at);
+    } else if (dropData.default_time_limit_hours) {
+      if (!recipient.verified_at) {
+        personalExpiry = new Date(verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000);
+      } else if (recipient.personal_expires_at) {
+        personalExpiry = new Date(recipient.personal_expires_at);
+      } else {
+        personalExpiry = new Date(verifiedAt.getTime() + dropData.default_time_limit_hours * 60 * 60 * 1000);
       }
+    }
 
-      await supabase
-        .from("drop_recipients")
-        .update({
-          accessed_at: new Date().toISOString(),
-          access_count: (recipient.access_count || 0) + 1,
-        })
-        .eq("id", recipient.id);
+    console.log("Calculated personal expiry:", personalExpiry?.toISOString());
 
+    const updateData: any = {
+      accessed_at: verifiedAt.toISOString(),
+      access_count: (recipient.access_count || 0) + 1,
+    };
+
+    if (dropData.default_time_limit_hours && !recipient.verified_at) {
+      updateData.verified_at = verifiedAt.toISOString();
+      updateData.personal_expires_at = personalExpiry?.toISOString();
+    }
+
+    console.log("Update data:", updateData);
+
+    const { error: updateError } = await supabase
+      .from("drop_recipients")
+      .update(updateData)
+      .eq("id", recipient.id);
+
+    if (updateError) {
+      console.log("ERROR: Failed to update recipient:", updateError);
+      setError(`Update failed: ${updateError.message}`);
+      setVerifying(false);
+      return;
+    }
+
+    console.log("SUCCESS: Recipient updated");
+
+    // DEBUG: Load content
+    console.log("--- Loading content ---");
+    console.log("Drop type:", dropData.drop_type);
+    console.log("File path:", dropData.file_path);
+    console.log("Masked URL:", dropData.masked_url);
+
+    setPersonalExpiresAt(personalExpiry);
+    
+    try {
       await loadContent();
+      console.log("SUCCESS: Content loaded");
       setViewMode("content");
-
+      
       saveVerificationSession(
-        email.toLowerCase().trim(),
-        sessionExpiry,
+        trimmedEmail,
+        personalExpiry,
         contentUrl,
         contentType,
         dropData,
@@ -842,14 +947,25 @@ export default function DropAccessPage() {
       );
 
       toast.success("Email verified successfully");
-    } catch (err) {
-      console.error("Error verifying email:", err);
-      setError("Failed to verify email");
-      trackMinimal.error(dropId, err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setVerifying(false);
+    } catch (contentError) {
+      console.log("ERROR: Failed to load content:", contentError);
+      setError(`Content loading failed: ${contentError}`);
     }
-  };
+
+    console.log("=== VERIFICATION DEBUG END ===");
+
+  } catch (err) {
+    console.error("FATAL ERROR in verification:", err);
+    console.log("Error details:", {
+      message: err instanceof Error ? err.message : "Unknown error",
+      stack: err instanceof Error ? err.stack : undefined
+    });
+    setError(`Verification failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    trackMinimal.error(dropId, err instanceof Error ? err.message : "Unknown error");
+  } finally {
+    setVerifying(false);
+  }
+};
 
   const loadContent = async () => {
     setLoading(true);

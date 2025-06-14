@@ -398,6 +398,15 @@ export function DropForm() {
           try {
             console.log("Sending email notifications to recipients...");
             
+            // Get creator's display name from user profile
+            const { data: userProfile, error: profileError } = await supabase
+              .from('users')
+              .select('display_name')
+              .eq('id', user.id)
+              .single();
+            
+            const creatorDisplayName = userProfile?.display_name || user.email?.split('@')[0] || 'Someone';
+            
             const emailResponse = await fetch('/api/send-drop-notification', {
               method: 'POST',
               headers: {
@@ -407,24 +416,10 @@ export function DropForm() {
                 dropId: insertedDrop.id,
                 recipientEmails: recipientEmails,
                 dropData: insertedDrop,
-                creatorEmail: user.email || 'Unknown User'
+                creatorEmail: user.email || 'Unknown User',
+                creatorDisplayName: creatorDisplayName // Add this line
               }),
             });
-
-            const emailResult = await emailResponse.json();
-            
-            if (!emailResponse.ok) {
-              console.error('Email API error:', emailResult);
-              // Don't throw here - drop creation was successful, just email failed
-              toast.error(`Drop created but failed to send ${emailResult.error ? 'some' : ''} notifications`);
-            } else {
-              console.log('Email notifications sent:', emailResult);
-              if (emailResult.results.failed > 0) {
-                toast.error(`Drop created! Sent ${emailResult.results.successful}/${recipientEmails.length} notifications successfully`);
-              } else {
-                toast.success(`Drop created! All ${emailResult.results.successful} notifications sent successfully`);
-              }
-            }
           } catch (emailError) {
             console.error('Error sending email notifications:', emailError);
             // Don't throw here - drop creation was successful, just email failed
