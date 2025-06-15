@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useAuth } from '@/components/AuthProvider'
+import { useState } from 'react'
+import { useSubscription } from '@/components/SubscriptionProvider'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
 import { 
   Crown, 
   TrendingUp, 
@@ -12,7 +13,6 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   Loader2,
-  ExternalLink,
   Settings,
   Zap,
   Database,
@@ -22,442 +22,306 @@ import {
   CreditCard,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  RefreshCw
 } from 'lucide-react'
 
-interface UsageSummary {
-  monthly: {
-    drops_created: number
-    recipients_added: number
-    storage_used_mb: number
-    period_start: string
-    period_end: string
-  }
-  weekly: {
-    drops_created: number
-    recipients_added: number
-    storage_used_mb: number
-    period_start: string
-    period_end: string
-  }
-  limits: {
-    drops: number
-    recipients: number
-    storage: number
-  }
-  subscription: {
-    tier: string
-    status: string
-  }
-}
-
-interface SubscriptionData {
-  hasSubscription: boolean
-  subscription: any
-}
-
 export function SubscriptionStatus() {
-  const { user } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null)
-  const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { 
+    usageData, 
+    userTier, 
+    loading, 
+    error, 
+    refreshData, 
+    lastUpdated 
+  } = useSubscription()
   const [isOpen, setIsOpen] = useState(false)
 
-  useEffect(() => {
-    if (user?.id) {
-      fetchSubscriptionData()
-    }
-  }, [user?.id])
-
-  const fetchSubscriptionData = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      // Fetch usage summary from API
-      const usageResponse = await fetch(`/api/usage?userId=${user!.id}`)
-      if (usageResponse.ok) {
-        const usage = await usageResponse.json()
-        setUsageSummary(usage)
-      } else {
-        throw new Error('Failed to fetch usage data')
-      }
-
-      // Fetch subscription details
-      const subResponse = await fetch(`/api/payments/manage?userId=${user!.id}`)
-      if (subResponse.ok) {
-        const data = await subResponse.json()
-        setSubscriptionData(data)
-      } else {
-        // Not having subscription data is not an error
-        setSubscriptionData({ hasSubscription: false, subscription: null })
-      }
-
-    } catch (err: unknown) {
-      console.error('Error fetching subscription data:', err)
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load subscription data'
-      setError(errorMessage)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const getPlanInfo = () => {
-    if (!usageSummary) return null
-
-    const tier = usageSummary.subscription.tier || 'free'
-
-    const planConfig = {
-      free: {
-        name: 'Free',
-        color: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
-        icon: FileText,
-        price: '$0/month',
-        features: [
-          '3 drops per month',
-          '3 recipients per drop', 
-          '10MB file upload limit',
-          'Basic analytics'
-        ]
-      },
-      individual: {
-        name: 'Individual',
-        color: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-        icon: Crown,
-        price: '$9.99/month',
-        features: [
-          '15 drops per month',
-          '20 recipients per drop',
-          '300MB file limit', 
-          'Advanced analytics',
-          'Priority support'
-        ]
-      },
-      business: {
-        name: 'Business',
-        color: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-        icon: Zap,
-        price: '$19.99/month',
-        features: [
-          'Unlimited drops',
-          'Unlimited recipients',
-          'Unlimited file size',
-          'Custom branding',
-          'Premium analytics',
-          'Team management'
-        ]
-      }
-    }
-
-    return planConfig[tier as keyof typeof planConfig] || planConfig.free
-  }
-
-  const formatStorageSize = (sizeInMB: number): string => {
-    if (sizeInMB < 1) {
-      return `${Math.round(sizeInMB * 1024)} KB`
-    } else if (sizeInMB < 1024) {
-      return `${Math.round(sizeInMB * 10) / 10} MB`
-    } else {
-      return `${Math.round((sizeInMB / 1024) * 10) / 10} GB`
-    }
-  }
-
-  const getUsagePercentage = (current: number, limit: number): number => {
-    if (limit === -1) return 0 // Unlimited
-    if (limit === 0) return 100
-    return Math.min(100, Math.round((current / limit) * 100))
-  }
-
-  const getUsageColor = (percentage: number): string => {
-    if (percentage >= 90) return 'text-red-600'
-    if (percentage >= 75) return 'text-yellow-600'
-    return 'text-green-600'
-  }
-
-  const getProgressColor = (percentage: number): string => {
-    if (percentage >= 90) return '#ef4444' // red-500
-    if (percentage >= 75) return '#eab308' // yellow-500
-    return '#3b82f6' // blue-500
-  }
-
-  const handleUpgrade = () => {
-    // Scroll to pricing section on homepage
-    window.location.href = '/#pricing'
-  }
-
-  const handleManageBilling = async () => {
-    try {
-      const response = await fetch('/api/payments/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'portal',
-          userId: user!.id,
-          userEmail: user!.email
-        })
-      })
-      
-      if (response.ok) {
-        const data = await response.json()
-        if (data.portal_url) {
-          window.open(data.portal_url, '_blank')
-        }
-      }
-    } catch (error) {
-      console.error('Error opening billing portal:', error)
-    }
-  }
-
+  // Show loading state
   if (loading) {
     return (
-      <div className="my-8">
-        <Card className="w-full">
-          <CardHeader>
-            <div className="flex items-center space-x-2">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <CardTitle>Loading Subscription...</CardTitle>
-            </div>
-          </CardHeader>
-        </Card>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="my-8">
-        <Card className="w-full border-red-200">
-          <CardHeader>
-            <CardTitle className="text-red-600 flex items-center">
-              <AlertTriangle className="w-5 h-5 mr-2" />
-              Error Loading Subscription
-            </CardTitle>
-            <CardDescription>{error}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={fetchSubscriptionData} variant="outline" size="sm">
-              Try Again
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  if (!usageSummary) return null
-
-  const planInfo = getPlanInfo()
-  const currentTier = usageSummary.subscription.tier || 'free'
-  const isFreePlan = currentTier === 'free'
-  const isPaidPlan = !isFreePlan
-  const dropsPercentage = getUsagePercentage(usageSummary.monthly.drops_created, usageSummary.limits.drops)
-  const storagePercentage = getUsagePercentage(usageSummary.monthly.storage_used_mb, usageSummary.limits.storage)
-
-  return (
-    <div className="my-8">
-      <Card className="w-full shadow-sm border-gray-200 dark:border-gray-700">
-        <CardHeader 
-          className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-          onClick={() => setIsOpen(!isOpen)}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              {planInfo && (
-                <>
-                  <div className={`p-2 rounded-lg ${planInfo.color}`}>
-                    <planInfo.icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      {planInfo.name} Plan
-                      <Badge className={planInfo.color}>
-                        {usageSummary.subscription.status}
-                      </Badge>
-                    </CardTitle>
-                    <CardDescription>{planInfo.price}</CardDescription>
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="flex items-center space-x-2">
-              {!isPaidPlan && (
-                <Button 
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleUpgrade()
-                  }} 
-                  size="sm" 
-                  className="mr-2"
-                >
-                  <Crown className="w-4 h-4 mr-2" />
-                  Upgrade
-                </Button>
-              )}
-              {isOpen ? (
-                <ChevronUp className="w-5 h-5 text-gray-500" />
-              ) : (
-                <ChevronDown className="w-5 h-5 text-gray-500" />
-              )}
+      <Card className="border-l-4 border-l-blue-500">
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+            <div>
+              <p className="font-medium">Loading subscription data...</p>
+              <p className="text-sm text-gray-500">Please wait</p>
             </div>
           </div>
-        </CardHeader>
-        
-        {isOpen && (
-          <CardContent className="pt-0 space-y-6">
-            {/* Usage Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Drops Usage */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-gray-600" />
-                    <span className="text-sm font-medium">Drops This Month</span>
-                  </div>
-                  <span className="text-sm text-gray-600">
-                    {usageSummary.monthly.drops_created} / {usageSummary.limits.drops === -1 ? '∞' : usageSummary.limits.drops}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div 
-                    className="h-2 rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${Math.min(100, dropsPercentage)}%`,
-                      backgroundColor: getProgressColor(dropsPercentage)
-                    }}
-                  />
-                </div>
-                <p className={`text-xs font-medium ${getUsageColor(dropsPercentage)}`}>
-                  {dropsPercentage}% of monthly limit used
-                </p>
-              </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
-              {/* Storage Usage */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Database className="w-4 h-4 text-gray-600" />
-                    <span className="text-sm font-medium">Storage Used</span>
-                  </div>
-                  <span className="text-sm text-gray-600">
-                    {formatStorageSize(usageSummary.monthly.storage_used_mb)} / {usageSummary.limits.storage === -1 ? '∞' : formatStorageSize(usageSummary.limits.storage)}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div 
-                    className="h-2 rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${Math.min(100, storagePercentage)}%`,
-                      backgroundColor: getProgressColor(storagePercentage)
-                    }}
-                  />
-                </div>
-                <p className={`text-xs font-medium ${getUsageColor(storagePercentage)}`}>
-                  {storagePercentage}% of storage limit used
+  // Show error state
+  if (error) {
+    return (
+      <Card className="border-l-4 border-l-red-500">
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+              <div>
+                <p className="font-medium text-red-700 dark:text-red-400">
+                  Failed to load subscription data
                 </p>
+                <p className="text-sm text-red-600 dark:text-red-500">{error}</p>
               </div>
             </div>
+            <Button onClick={refreshData} variant="outline" size="sm">
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Retry
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
-            {/* Plan Features */}
-            <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
-              <h4 className="font-medium text-gray-900 dark:text-white mb-3">Current Plan Features</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="flex items-center space-x-2">
-                  <FileText className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm">
-                    Drops per month: {usageSummary.limits.drops === -1 ? 'Unlimited' : usageSummary.limits.drops}
-                  </span>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Users className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm">
-                    Recipients per drop: {usageSummary.limits.recipients === -1 ? 'Unlimited' : usageSummary.limits.recipients}
-                  </span>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Database className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm">
-                    File size limit: {currentTier === 'free' ? '10MB' : currentTier === 'individual' ? '300MB' : 'Unlimited'}
-                  </span>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <TrendingUp className="w-4 h-4 text-gray-400" />
-                  <span className="text-sm">
-                    Analytics: {currentTier === 'free' ? 'Basic' : currentTier === 'individual' ? 'Advanced' : 'Premium'}
-                  </span>
-                </div>
-                
-                {/* Only show custom branding for business plan */}
-                {currentTier === 'business' && (
-                  <div className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-4 h-4 text-green-500" />
-                    <span className="text-sm">
-                      Custom branding
-                    </span>
-                  </div>
-                )}
-                
-                {/* Show priority support for paid plans */}
-                {isPaidPlan && (
-                  <div className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-4 h-4 text-green-500" />
-                    <span className="text-sm">
-                      Priority support
-                    </span>
-                  </div>
-                )}
+  // No data available
+  if (!usageData) {
+    return (
+      <Card className="border-l-4 border-l-gray-300">
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Database className="w-5 h-5 text-gray-400" />
+              <div>
+                <p className="font-medium">No subscription data available</p>
+                <p className="text-sm text-gray-500">Unable to load your plan information</p>
               </div>
             </div>
+            <Button onClick={refreshData} variant="outline" size="sm">
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
-            {/* Upgrade Banner for Free Users */}
-            {isFreePlan && (dropsPercentage > 70 || storagePercentage > 70) && (
-              <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-                <div className="flex items-start space-x-3">
-                  <div className="flex-shrink-0">
-                    <TrendingUp className="w-5 h-5 text-blue-600" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                      Approaching Limits
-                    </h4>
-                    <p className="text-sm text-blue-700 dark:text-blue-200 mt-1">
-                      You're running low on your monthly allowance. Upgrade to Individual for 15 drops/month and 300MB files.
-                    </p>
-                    <Button onClick={handleUpgrade} size="sm" className="mt-3">
-                      <Crown className="w-4 h-4 mr-2" />
-                      Upgrade Now
-                    </Button>
-                  </div>
-                </div>
-              </div>
+  const getTierInfo = () => {
+    switch (userTier) {
+      case 'business':
+        return {
+          color: 'purple',
+          icon: Crown,
+          borderColor: 'border-l-purple-500',
+          bgColor: 'bg-purple-50 dark:bg-purple-900/20',
+          textColor: 'text-purple-700 dark:text-purple-400',
+          badgeColor: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
+        }
+      case 'individual':
+        return {
+          color: 'blue',
+          icon: Crown,
+          borderColor: 'border-l-blue-500',
+          bgColor: 'bg-blue-50 dark:bg-blue-900/20',
+          textColor: 'text-blue-700 dark:text-blue-400',
+          badgeColor: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+        }
+      default:
+        return {
+          color: 'gray',
+          icon: Zap,
+          borderColor: 'border-l-gray-300',
+          bgColor: 'bg-gray-50 dark:bg-gray-800/50',
+          textColor: 'text-gray-700 dark:text-gray-400',
+          badgeColor: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+        }
+    }
+  }
+
+  const tierInfo = getTierInfo()
+  const TierIcon = tierInfo.icon
+
+  const calculateUsagePercentage = (used: number, limit: number) => {
+    if (limit === -1) return 0 // Unlimited
+    return Math.min((used / limit) * 100, 100)
+  }
+
+  const getUsageColor = (percentage: number) => {
+    if (percentage >= 90) return 'text-red-600 dark:text-red-400'
+    if (percentage >= 75) return 'text-amber-600 dark:text-amber-400'
+    return 'text-green-600 dark:text-green-400'
+  }
+
+  const dropsPercentage = calculateUsagePercentage(
+    usageData.monthly.drops_created, 
+    usageData.limits.drops
+  )
+  const storagePercentage = calculateUsagePercentage(
+    usageData.monthly.storage_used_mb, 
+    usageData.limits.storage
+  )
+
+  return (
+    <Card className={`${tierInfo.borderColor} transition-all duration-200`}>
+      <CardHeader 
+        className="cursor-pointer"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${tierInfo.bgColor}`}>
+              <TierIcon className={`w-5 h-5 ${tierInfo.textColor}`} />
+            </div>
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <span>Current Plan</span>
+                <Badge className={tierInfo.badgeColor}>
+                  {userTier.charAt(0).toUpperCase() + userTier.slice(1)}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                {userTier === 'free' && 'Upgrade to unlock more features'}
+                {userTier === 'individual' && 'Perfect for personal use'}
+                {userTier === 'business' && 'Full-featured business plan'}
+              </CardDescription>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {lastUpdated && (
+              <span className="text-xs text-gray-500">
+                Updated {Math.round((Date.now() - lastUpdated.getTime()) / 1000 / 60)}m ago
+              </span>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation()
+                refreshData()
+              }}
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
+            {isOpen ? (
+              <ChevronUp className="w-4 h-4 text-gray-400" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-gray-400" />
+            )}
+          </div>
+        </div>
+      </CardHeader>
 
-            {/* Billing Info for Paid Users */}
-            {isPaidPlan && subscriptionData?.subscription && (
-              <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg">
+      {isOpen && (
+        <CardContent className="pt-0">
+          <div className="space-y-6">
+            {/* Usage Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Drops Usage */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm font-medium">Drops</span>
+                  </div>
+                  <span className={`text-sm font-mono ${getUsageColor(dropsPercentage)}`}>
+                    {usageData.monthly.drops_created}
+                    {usageData.limits.drops !== -1 && `/${usageData.limits.drops}`}
+                  </span>
+                </div>
+                {usageData.limits.drops !== -1 && (
+                  <div className="space-y-1">
+                    <Progress 
+                      value={dropsPercentage} 
+                      className="h-2"
+                    />
+                    <p className="text-xs text-gray-500">
+                      {Math.round(dropsPercentage)}% used this month
+                    </p>
+                  </div>
+                )}
+                {usageData.limits.drops === -1 && (
+                  <p className="text-xs text-green-600 dark:text-green-400">Unlimited</p>
+                )}
+              </div>
+
+              {/* Recipients */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-green-500" />
+                    <span className="text-sm font-medium">Recipients</span>
+                  </div>
+                  <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
+                    {usageData.monthly.recipients_added}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Max {usageData.limits.recipients === -1 ? 'unlimited' : usageData.limits.recipients} per drop
+                </p>
+              </div>
+
+              {/* Storage */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-purple-500" />
+                    <span className="text-sm font-medium">Storage</span>
+                  </div>
+                  <span className={`text-sm font-mono ${getUsageColor(storagePercentage)}`}>
+                    {Math.round(usageData.monthly.storage_used_mb)}
+                    {usageData.limits.storage !== -1 && `/${usageData.limits.storage}`} MB
+                  </span>
+                </div>
+                {usageData.limits.storage !== -1 && (
+                  <div className="space-y-1">
+                    <Progress 
+                      value={storagePercentage} 
+                      className="h-2"
+                    />
+                    <p className="text-xs text-gray-500">
+                      {Math.round(storagePercentage)}% used
+                    </p>
+                  </div>
+                )}
+                {usageData.limits.storage === -1 && (
+                  <p className="text-xs text-green-600 dark:text-green-400">Unlimited</p>
+                )}
+              </div>
+            </div>
+
+            {/* Upgrade CTA for free users */}
+            {userTier === 'free' && (
+              <div className="p-4 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg border">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-medium text-gray-900 dark:text-white">Next Billing</h4>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {subscriptionData.subscription.current_period_end ? 
-                        new Date(subscriptionData.subscription.current_period_end).toLocaleDateString() : 
-                        'Loading...'
-                      }
+                    <h4 className="font-medium text-gray-900 dark:text-white">
+                      Ready to unlock more features?
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Upgrade to get more drops, larger file uploads, and advanced features.
                     </p>
                   </div>
-                  <Button onClick={handleManageBilling} variant="outline" size="sm">
-                    <CreditCard className="w-4 h-4 mr-2" />
-                    Billing Portal
+                  <Button asChild>
+                    <a href="/settings">
+                      <ArrowUp className="w-4 h-4 mr-2" />
+                      Upgrade
+                    </a>
                   </Button>
                 </div>
               </div>
             )}
-          </CardContent>
-        )}
-      </Card>
-    </div>
+
+            {/* Plan Info */}
+            <div className="pt-4 border-t">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-500">Plan Status</span>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <span className="text-green-600 dark:text-green-400 font-medium">
+                    {usageData.subscription.status === 'active' ? 'Active' : 'Free'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      )}
+    </Card>
   )
 }
