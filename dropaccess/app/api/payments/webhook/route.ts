@@ -54,6 +54,17 @@ interface WebhookPayload {
         plan: string;
       };
     };
+    // Handle flexible payload structure - sometimes data is directly in root
+    subscription_id?: string;
+    customer_id?: string;
+    product_id?: string;
+    status?: string;
+    current_period_start?: string;
+    current_period_end?: string;
+    payment_id?: string;
+    amount?: number;
+    currency?: string;
+    metadata?: any;
   };
 }
 
@@ -165,31 +176,42 @@ export async function POST(request: NextRequest) {
     try {
       switch (type) {
         case WEBHOOK_EVENTS.SUBSCRIPTION_CREATED:
+        case 'subscription.created':
           console.log(`🚀 [${requestId}] Processing subscription.created`);
           await handleSubscriptionCreated(data, requestId);
           handlerResult = { success: true, message: 'Subscription created successfully' };
           break;
           
         case WEBHOOK_EVENTS.SUBSCRIPTION_RENEWED:
-        case 'subscription.renew': // Handle both possible event names
+        case 'subscription.renewed':
+        case 'subscription.renew':
           console.log(`🔄 [${requestId}] Processing subscription renewal`);
           await handleSubscriptionRenewed(data, requestId);
           handlerResult = { success: true, message: 'Subscription renewed successfully' };
           break;
           
+        case 'subscription.active':
+          console.log(`✅ [${requestId}] Processing subscription.active`);
+          await handleSubscriptionActive(data, requestId);
+          handlerResult = { success: true, message: 'Subscription activated successfully' };
+          break;
+          
         case WEBHOOK_EVENTS.PAYMENT_SUCCEEDED:
+        case 'payment.succeeded':
           console.log(`💰 [${requestId}] Processing payment.succeeded`);
           await handlePaymentSucceeded(data, requestId);
           handlerResult = { success: true, message: 'Payment processed successfully' };
           break;
           
         case WEBHOOK_EVENTS.SUBSCRIPTION_CANCELED:
+        case 'subscription.canceled':
           console.log(`❌ [${requestId}] Processing subscription.canceled`);
           await handleSubscriptionCanceled(data, requestId);
           handlerResult = { success: true, message: 'Subscription cancellation processed' };
           break;
           
         case WEBHOOK_EVENTS.PAYMENT_FAILED:
+        case 'payment.failed':
           console.log(`💸 [${requestId}] Processing payment.failed`);
           await handlePaymentFailed(data, requestId);
           handlerResult = { success: true, message: 'Payment failure tracked' };
@@ -197,6 +219,7 @@ export async function POST(request: NextRequest) {
           
         default:
           console.log(`❓ [${requestId}] Unhandled webhook type:`, type);
+          console.log(`📄 [${requestId}] Full payload for unhandled event:`, JSON.stringify(payload, null, 2));
           handlerResult = { success: true, message: `Unhandled event type: ${type}` };
       }
     } catch (handlerError) {
@@ -234,9 +257,24 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
     return;
   }
 
-  const { subscription } = data;
-  if (!subscription) {
-    console.error(`❌ [${requestId}] No subscription data in webhook payload`);
+  // Extract subscription data - handle both nested and flat structures
+  const subscription = data.subscription || {
+    subscription_id: data.subscription_id!,
+    customer_id: data.customer_id!,
+    product_id: data.product_id!,
+    status: data.status!,
+    current_period_start: data.current_period_start!,
+    current_period_end: data.current_period_end!,
+    cancel_at_period_end: false,
+    metadata: data.metadata
+  };
+
+  if (!subscription.subscription_id || !subscription.customer_id) {
+    console.error(`❌ [${requestId}] Missing required subscription data:`, {
+      hasSubscriptionId: !!subscription.subscription_id,
+      hasCustomerId: !!subscription.customer_id,
+      rawData: data
+    });
     return;
   }
 
@@ -373,15 +411,127 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
   }
 }
 
+async function handleSubscriptionActive(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionActive`);
+    return;
+  }
+
+  // Extract subscription data - handle both nested and flat structures
+  const subscription = data.subscription || {
+    subscription_id: data.subscription_id!,
+    customer_id: data.customer_id!,
+    product_id: data.product_id!,
+    status: data.status!,
+    current_period_start: data.current_period_start!,
+    current_period_end: data.current_period_end!,
+    cancel_at_period_end: false,
+    metadata: data.metadata
+  };
+
+  if (!subscription.subscription_id || !subscription.customer_id) {
+    console.error(`❌ [${requestId}] Missing required subscription data for activation:`, {
+      hasSubscriptionId: !!subscription.subscription_id,
+      hasCustomerId: !!subscription.customer_id,
+      rawData: data
+    });
+    return;
+  }
+
+  console.log(`✅ [${requestId}] Processing subscription activation:`, {
+    subscriptionId: subscription.subscription_id,
+    customerId: subscription.customer_id,
+    status: subscription.status
+  });
+
+  try {
+    // subscription.active typically means the subscription is now active after payment
+    // This is similar to subscription.created but for existing subscriptions that became active
+    
+    // Update subscription status to active
+    const { error: subscriptionError } = await supabaseAdmin
+      .from('subscriptions')
+      .update({
+        status: 'active',
+        current_period_start: subscription.current_period_start,
+        current_period_end: subscription.current_period_end,
+        expires_at: subscription.current_period_end,
+        updated_at: new Date().toISOString()
+      })
+      .eq('dodo_subscription_id', subscription.subscription_id);
+
+    if (subscriptionError) {
+      console.error(`❌ [${requestId}] Error updating subscription to active:`, subscriptionError);
+      throw subscriptionError;
+    }
+
+    // Update user status to active/paid
+    const { error: userError } = await supabaseAdmin
+      .from('users')
+      .update({
+        is_paid: true,
+        subscription_status: 'active',
+        subscription_ends_at: subscription.current_period_end,
+        updated_at: new Date().toISOString()
+      })
+      .eq('dodo_customer_id', subscription.customer_id);
+
+    if (userError) {
+      console.error(`❌ [${requestId}] Error updating user to active:`, userError);
+      throw userError;
+    }
+
+    // Get user for tracking
+    const { data: user } = await supabaseAdmin
+      .from('users')
+      .select('email, id, subscription_tier')
+      .eq('dodo_customer_id', subscription.customer_id)
+      .single();
+
+    if (user) {
+      await captureEvent(user.email, 'subscription_activated', {
+        subscription_id: subscription.subscription_id,
+        status: subscription.status,
+        current_period_end: subscription.current_period_end,
+        plan: user.subscription_tier,
+        user_id: user.id
+      });
+      
+      console.log(`✅ [${requestId}] Subscription activation tracked for user:`, user.id);
+    }
+
+    console.log(`✅ [${requestId}] Subscription activated successfully:`, subscription.subscription_id);
+
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error in handleSubscriptionActive:`, error);
+    throw error;
+  }
+}
+
 async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId: string) {
   if (!supabaseAdmin) {
     console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionRenewed`);
     return;
   }
 
-  const { subscription } = data;
-  if (!subscription) {
-    console.error(`❌ [${requestId}] No subscription data for renewal`);
+  // Extract subscription data - handle both nested and flat structures
+  const subscription = data.subscription || {
+    subscription_id: data.subscription_id!,
+    customer_id: data.customer_id!,
+    product_id: data.product_id!,
+    status: data.status!,
+    current_period_start: data.current_period_start!,
+    current_period_end: data.current_period_end!,
+    cancel_at_period_end: false,
+    metadata: data.metadata
+  };
+
+  if (!subscription.subscription_id || !subscription.customer_id) {
+    console.error(`❌ [${requestId}] Missing required subscription data for renewal:`, {
+      hasSubscriptionId: !!subscription.subscription_id,
+      hasCustomerId: !!subscription.customer_id,
+      rawData: data
+    });
     return;
   }
 
@@ -451,9 +601,23 @@ async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: s
     return;
   }
 
-  const { payment } = data;
-  if (!payment) {
-    console.error(`❌ [${requestId}] No payment data in webhook`);
+  // Extract payment data - handle both nested and flat structures
+  const payment = data.payment || {
+    payment_id: data.payment_id!,
+    customer_id: data.customer_id!,
+    amount: data.amount!,
+    currency: data.currency || 'USD',
+    status: data.status || 'succeeded',
+    subscription_id: data.subscription_id,
+    metadata: data.metadata
+  };
+
+  if (!payment.payment_id || !payment.customer_id) {
+    console.error(`❌ [${requestId}] Missing required payment data:`, {
+      hasPaymentId: !!payment.payment_id,
+      hasCustomerId: !!payment.customer_id,
+      rawData: data
+    });
     return;
   }
 
