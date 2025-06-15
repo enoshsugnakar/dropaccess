@@ -25,6 +25,51 @@ interface WebhookHeaders {
 interface WebhookPayload {
   type: string;
   data: {
+    // Actual Dodo Payments payload structure
+    payload_type?: string;
+    subscription_id?: string;
+    payment_id?: string;
+    customer?: {
+      customer_id: string;
+      name: string;
+      email: string;
+    };
+    
+    // Subscription fields
+    recurring_pre_tax_amount?: number;
+    tax_inclusive?: boolean;
+    currency?: string;
+    status?: string;
+    created_at?: string;
+    product_id?: string;
+    quantity?: number;
+    next_billing_date?: string;
+    previous_billing_date?: string;
+    cancel_at_next_billing_date?: boolean;
+    cancelled_at?: string;
+    
+    // Payment fields
+    total_amount?: number;
+    payment_method?: string;
+    settlement_amount?: number;
+    
+    // Common fields
+    metadata?: {
+      user_id: string;
+      plan: string;
+      app_name?: string;
+      is_plan_change?: string;
+      previous_plan?: string;
+    };
+    billing?: {
+      country: string;
+      state: string;
+      city: string;
+      street: string;
+      zipcode: string;
+    };
+    
+    // Legacy support for nested structure
     subscription?: {
       subscription_id: string;
       customer_id: string;
@@ -54,17 +99,12 @@ interface WebhookPayload {
         plan: string;
       };
     };
-    // Handle flexible payload structure - sometimes data is directly in root
-    subscription_id?: string;
+    
+    // Fallback fields
     customer_id?: string;
-    product_id?: string;
-    status?: string;
     current_period_start?: string;
     current_period_end?: string;
-    payment_id?: string;
     amount?: number;
-    currency?: string;
-    metadata?: any;
   };
 }
 
@@ -257,22 +297,25 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
     return;
   }
 
-  // Extract subscription data - handle both nested and flat structures
+  // Extract subscription data from actual Dodo payload structure
+  const customerId = data.customer?.customer_id || data.customer_id;
+  const userEmail = data.customer?.email;
+  
   const subscription = data.subscription || {
     subscription_id: data.subscription_id!,
-    customer_id: data.customer_id!,
+    customer_id: customerId!,
     product_id: data.product_id!,
     status: data.status!,
-    current_period_start: data.current_period_start!,
-    current_period_end: data.current_period_end!,
-    cancel_at_period_end: false,
+    current_period_start: data.created_at || data.current_period_start!,
+    current_period_end: data.next_billing_date || data.current_period_end!,
+    cancel_at_period_end: data.cancel_at_next_billing_date || false,
     metadata: data.metadata
   };
 
-  if (!subscription.subscription_id || !subscription.customer_id) {
+  if (!subscription.subscription_id || !customerId) {
     console.error(`❌ [${requestId}] Missing required subscription data:`, {
       hasSubscriptionId: !!subscription.subscription_id,
-      hasCustomerId: !!subscription.customer_id,
+      hasCustomerId: !!customerId,
       rawData: data
     });
     return;
@@ -280,10 +323,11 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
 
   console.log(`📝 [${requestId}] Processing subscription created:`, {
     subscriptionId: subscription.subscription_id,
-    customerId: subscription.customer_id,
+    customerId: customerId,
     productId: subscription.product_id,
     status: subscription.status,
-    metadata: subscription.metadata
+    metadata: subscription.metadata,
+    userEmail: userEmail
   });
 
   const { user_id: userId, plan, is_plan_change } = subscription.metadata || {};
@@ -306,12 +350,12 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       return;
     }
 
-    const userEmail = user.email;
+    const finalUserEmail = user.email || userEmail;
     const isUpgrade = is_plan_change === 'true';
     
     console.log(`👤 [${requestId}] User details:`, { 
       userId, 
-      userEmail, 
+      userEmail: finalUserEmail, 
       currentTier: user.subscription_tier,
       newPlan: plan,
       isUpgrade 
@@ -323,7 +367,7 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       subscription_status: 'active',
       subscription_tier: plan || 'individual',
       subscription_ends_at: subscription.current_period_end,
-      dodo_customer_id: subscription.customer_id,
+      dodo_customer_id: customerId,
       updated_at: new Date().toISOString()
     };
 
@@ -344,7 +388,7 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       user_id: userId,
       plan: plan || 'individual',
       status: 'active',
-      dodo_customer_id: subscription.customer_id,
+      dodo_customer_id: customerId,
       dodo_subscription_id: subscription.subscription_id,
       dodo_product_id: subscription.product_id,
       current_period_start: subscription.current_period_start,
@@ -393,10 +437,10 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
 
     // Track the event
     const eventName = isUpgrade ? 'subscription_upgraded' : 'subscription_created';
-    await captureEvent(userEmail, eventName, {
+    await captureEvent(finalUserEmail, eventName, {
       plan: plan || 'individual',
       subscription_id: subscription.subscription_id,
-      customer_id: subscription.customer_id,
+      customer_id: customerId,
       current_period_end: subscription.current_period_end,
       user_id: userId,
       is_upgrade: isUpgrade,
@@ -417,22 +461,25 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
     return;
   }
 
-  // Extract subscription data - handle both nested and flat structures
+  // Extract subscription data from actual Dodo payload structure
+  const customerId = data.customer?.customer_id || data.customer_id;
+  const userEmail = data.customer?.email;
+  
   const subscription = data.subscription || {
     subscription_id: data.subscription_id!,
-    customer_id: data.customer_id!,
+    customer_id: customerId!,
     product_id: data.product_id!,
     status: data.status!,
-    current_period_start: data.current_period_start!,
-    current_period_end: data.current_period_end!,
-    cancel_at_period_end: false,
+    current_period_start: data.created_at || data.current_period_start!,
+    current_period_end: data.next_billing_date || data.current_period_end!,
+    cancel_at_period_end: data.cancel_at_next_billing_date || false,
     metadata: data.metadata
   };
 
-  if (!subscription.subscription_id || !subscription.customer_id) {
+  if (!subscription.subscription_id || !customerId) {
     console.error(`❌ [${requestId}] Missing required subscription data for activation:`, {
       hasSubscriptionId: !!subscription.subscription_id,
-      hasCustomerId: !!subscription.customer_id,
+      hasCustomerId: !!customerId,
       rawData: data
     });
     return;
@@ -440,7 +487,7 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
 
   console.log(`✅ [${requestId}] Processing subscription activation:`, {
     subscriptionId: subscription.subscription_id,
-    customerId: subscription.customer_id,
+    customerId: customerId,
     status: subscription.status
   });
 
@@ -472,9 +519,10 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
         is_paid: true,
         subscription_status: 'active',
         subscription_ends_at: subscription.current_period_end,
+        dodo_customer_id: customerId,
         updated_at: new Date().toISOString()
       })
-      .eq('dodo_customer_id', subscription.customer_id);
+      .eq('dodo_customer_id', customerId);
 
     if (userError) {
       console.error(`❌ [${requestId}] Error updating user to active:`, userError);
@@ -485,7 +533,7 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
     const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', subscription.customer_id)
+      .eq('dodo_customer_id', customerId)
       .single();
 
     if (user) {
@@ -514,22 +562,24 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId
     return;
   }
 
-  // Extract subscription data - handle both nested and flat structures
+  // Extract subscription data from actual Dodo payload structure
+  const customerId = data.customer?.customer_id || data.customer_id;
+  
   const subscription = data.subscription || {
     subscription_id: data.subscription_id!,
-    customer_id: data.customer_id!,
+    customer_id: customerId!,
     product_id: data.product_id!,
     status: data.status!,
-    current_period_start: data.current_period_start!,
-    current_period_end: data.current_period_end!,
-    cancel_at_period_end: false,
+    current_period_start: data.previous_billing_date || data.current_period_start!,
+    current_period_end: data.next_billing_date || data.current_period_end!,
+    cancel_at_period_end: data.cancel_at_next_billing_date || false,
     metadata: data.metadata
   };
 
-  if (!subscription.subscription_id || !subscription.customer_id) {
+  if (!subscription.subscription_id || !customerId) {
     console.error(`❌ [${requestId}] Missing required subscription data for renewal:`, {
       hasSubscriptionId: !!subscription.subscription_id,
-      hasCustomerId: !!subscription.customer_id,
+      hasCustomerId: !!customerId,
       rawData: data
     });
     return;
@@ -564,7 +614,7 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId
         is_paid: true,
         updated_at: new Date().toISOString()
       })
-      .eq('dodo_customer_id', subscription.customer_id);
+      .eq('dodo_customer_id', customerId);
 
     if (userError) {
       console.error(`❌ [${requestId}] Error updating user on renewal:`, userError);
@@ -575,7 +625,7 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId
     const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', subscription.customer_id)
+      .eq('dodo_customer_id', customerId)
       .single();
 
     if (user) {
@@ -601,21 +651,23 @@ async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: s
     return;
   }
 
-  // Extract payment data - handle both nested and flat structures
+  // Extract payment data from actual Dodo payload structure
+  const customerId = data.customer?.customer_id || data.customer_id;
+  
   const payment = data.payment || {
     payment_id: data.payment_id!,
-    customer_id: data.customer_id!,
-    amount: data.amount!,
+    customer_id: customerId!,
+    amount: data.total_amount || data.amount!,
     currency: data.currency || 'USD',
     status: data.status || 'succeeded',
     subscription_id: data.subscription_id,
     metadata: data.metadata
   };
 
-  if (!payment.payment_id || !payment.customer_id) {
+  if (!payment.payment_id || !customerId) {
     console.error(`❌ [${requestId}] Missing required payment data:`, {
       hasPaymentId: !!payment.payment_id,
-      hasCustomerId: !!payment.customer_id,
+      hasCustomerId: !!customerId,
       rawData: data
     });
     return;
@@ -633,7 +685,7 @@ async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: s
     const { data: user } = await supabaseAdmin
       .from('users')
       .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', payment.customer_id)
+      .eq('dodo_customer_id', customerId)
       .single();
 
     if (user) {
