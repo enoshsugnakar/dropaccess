@@ -4,14 +4,16 @@ import { WEBHOOK_EVENTS } from '@/lib/dodoClient';
 import { captureEvent } from '@/lib/posthog';
 import { Webhook } from 'standardwebhooks';
 
-// Initialize webhook verifier with better error handling
+// Initialize webhook verifier
 let webhook: Webhook | null = null;
 try {
   if (process.env.DODO_PAYMENTS_WEBHOOK_SECRET) {
     webhook = new Webhook(process.env.DODO_PAYMENTS_WEBHOOK_SECRET);
+  } else {
+    console.error('❌ DODO_PAYMENTS_WEBHOOK_SECRET environment variable not set');
   }
 } catch (error) {
-  console.error('Failed to initialize webhook verifier:', error);
+  console.error('❌ Failed to initialize webhook verifier:', error);
 }
 
 interface WebhookHeaders {
@@ -36,6 +38,8 @@ interface WebhookPayload {
         user_id: string;
         plan: string;
         app_name?: string;
+        is_plan_change?: string;
+        previous_plan?: string;
       };
     };
     payment?: {
@@ -45,118 +49,178 @@ interface WebhookPayload {
       currency: string;
       status: string;
       subscription_id?: string;
+      metadata?: {
+        user_id: string;
+        plan: string;
+      };
     };
   };
 }
 
-// Add this temporary debugging to your webhook route in production
-// Replace the webhook route with this enhanced version for debugging:
-
 export async function POST(request: NextRequest) {
-  console.log('🎣 PRODUCTION Webhook received at:', new Date().toISOString());
+  const requestId = crypto.randomUUID().substring(0, 8);
+  console.log(`🎣 [${requestId}] Webhook received at:`, new Date().toISOString());
   
   try {
-    // Log environment variables (safely)
-    console.log('🔧 Environment check:', {
-      has_webhook_secret: !!process.env.DODO_PAYMENTS_WEBHOOK_SECRET,
-      has_supabase_admin: !!supabaseAdmin,
-      has_api_key: !!process.env.DODO_PAYMENTS_API_KEY,
-      environment: process.env.DODO_PAYMENTS_ENVIRONMENT,
-      node_env: process.env.NODE_ENV
-    });
-
+    // Check critical dependencies
     if (!supabaseAdmin) {
-      console.error('❌ CRITICAL: supabaseAdmin not configured');
+      console.error(`❌ [${requestId}] supabaseAdmin not configured`);
       return NextResponse.json(
         { error: 'Database configuration error' },
         { status: 500 }
       );
     }
 
-    // Get raw body
-    const body = await request.text();
-    console.log('📦 Webhook body length:', body.length);
-    console.log('📦 Webhook body preview:', body.substring(0, 200) + '...');
-    
-    // Log headers
-    const allHeaders: Record<string, string> = {};
-    request.headers.forEach((value, key) => {
-      allHeaders[key] = value;
-    });
-    console.log('📋 Webhook headers:', allHeaders);
+    if (!webhook) {
+      console.error(`❌ [${requestId}] Webhook verifier not initialized`);
+      return NextResponse.json(
+        { error: 'Webhook configuration error' },
+        { status: 500 }
+      );
+    }
 
-    // Extract webhook headers
+    // Get raw body for signature verification
+    const body = await request.text();
+    if (!body) {
+      console.error(`❌ [${requestId}] Empty request body`);
+      return NextResponse.json(
+        { error: 'Empty request body' },
+        { status: 400 }
+      );
+    }
+
+    console.log(`📦 [${requestId}] Webhook body length:`, body.length);
+
+    // Extract webhook headers following Dodo Payments standard
     const webhookHeaders: WebhookHeaders = {
-      'webhook-id': request.headers.get('webhook-id') || 
-                   request.headers.get('svix-id') || 
-                   request.headers.get('x-webhook-id') || '',
-      'webhook-signature': request.headers.get('webhook-signature') || 
-                          request.headers.get('svix-signature') || 
-                          request.headers.get('x-webhook-signature') || '',
-      'webhook-timestamp': request.headers.get('webhook-timestamp') || 
-                          request.headers.get('svix-timestamp') || 
-                          request.headers.get('x-webhook-timestamp') || ''
+      'webhook-id': request.headers.get('webhook-id') || '',
+      'webhook-signature': request.headers.get('webhook-signature') || '',
+      'webhook-timestamp': request.headers.get('webhook-timestamp') || ''
     };
 
-    console.log('🔑 Extracted webhook headers:', webhookHeaders);
+    // Validate required headers
+    if (!webhookHeaders['webhook-id'] || !webhookHeaders['webhook-signature'] || !webhookHeaders['webhook-timestamp']) {
+      console.error(`❌ [${requestId}] Missing required webhook headers:`, {
+        hasId: !!webhookHeaders['webhook-id'],
+        hasSignature: !!webhookHeaders['webhook-signature'],
+        hasTimestamp: !!webhookHeaders['webhook-timestamp']
+      });
+      return NextResponse.json(
+        { error: 'Missing required webhook headers' },
+        { status: 400 }
+      );
+    }
 
-    // Parse payload
+    console.log(`🔑 [${requestId}] Webhook headers received:`, {
+      id: webhookHeaders['webhook-id'],
+      timestamp: webhookHeaders['webhook-timestamp'],
+      signatureLength: webhookHeaders['webhook-signature'].length
+    });
+
+    // Parse payload before verification to check structure
     let payload: WebhookPayload;
     try {
       payload = JSON.parse(body);
-      console.log('📄 PRODUCTION Webhook payload:', {
-        type: payload.type,
-        subscription_id: payload.data?.subscription?.subscription_id,
-        customer_id: payload.data?.subscription?.customer_id,
-        user_id: payload.data?.subscription?.metadata?.user_id,
-        plan: payload.data?.subscription?.metadata?.plan
-      });
+      if (!payload.type || !payload.data) {
+        throw new Error('Invalid payload structure: missing type or data');
+      }
     } catch (parseError) {
-      console.error('❌ CRITICAL: Failed to parse webhook payload:', parseError);
+      console.error(`❌ [${requestId}] Failed to parse webhook payload:`, parseError);
       return NextResponse.json(
         { error: 'Invalid JSON payload' },
         { status: 400 }
       );
     }
 
-    // IMPORTANT: Skip signature verification for debugging
-    console.log('⚠️ PRODUCTION DEBUG: Skipping signature verification');
+    console.log(`📄 [${requestId}] Parsed webhook payload:`, {
+      type: payload.type,
+      subscriptionId: payload.data?.subscription?.subscription_id,
+      paymentId: payload.data?.payment?.payment_id,
+      customerId: payload.data?.subscription?.customer_id || payload.data?.payment?.customer_id
+    });
 
-    const { type, data } = payload;
-    console.log('🎯 Processing webhook type:', type);
-
-    // Handle webhook events
-    switch (type) {
-      case WEBHOOK_EVENTS.SUBSCRIPTION_CREATED:
-        console.log('🚀 PRODUCTION: Processing subscription created');
-        await handleSubscriptionCreated(data);
-        console.log('✅ PRODUCTION: Subscription created handler completed');
-        break;
-        
-      case WEBHOOK_EVENTS.PAYMENT_SUCCEEDED:
-        console.log('💰 PRODUCTION: Processing payment succeeded');
-        await handlePaymentSucceeded(data);
-        console.log('✅ PRODUCTION: Payment succeeded handler completed');
-        break;
-        
-      default:
-        console.log('❓ PRODUCTION: Unhandled webhook type:', type);
+    // Verify webhook signature - CRITICAL for security
+    try {
+      await webhook.verify(body, webhookHeaders);
+      console.log(`✅ [${requestId}] Webhook signature verified successfully`);
+    } catch (verificationError) {
+      console.error(`❌ [${requestId}] Webhook signature verification failed:`, verificationError);
+      
+      // Only allow bypass in development with explicit flag
+      if (process.env.NODE_ENV === 'development' && process.env.DODO_SKIP_WEBHOOK_VERIFICATION === 'true') {
+        console.warn(`⚠️ [${requestId}] Bypassing verification in development mode`);
+      } else {
+        return NextResponse.json(
+          { error: 'Webhook signature verification failed' },
+          { status: 401 }
+        );
+      }
     }
 
-    console.log('✅ PRODUCTION: Webhook processing completed successfully');
+    const { type, data } = payload;
+
+    // Handle webhook events with proper error isolation
+    let handlerResult = { success: false, message: '' };
+
+    try {
+      switch (type) {
+        case WEBHOOK_EVENTS.SUBSCRIPTION_CREATED:
+          console.log(`🚀 [${requestId}] Processing subscription.created`);
+          await handleSubscriptionCreated(data, requestId);
+          handlerResult = { success: true, message: 'Subscription created successfully' };
+          break;
+          
+        case WEBHOOK_EVENTS.SUBSCRIPTION_RENEWED:
+        case 'subscription.renew': // Handle both possible event names
+          console.log(`🔄 [${requestId}] Processing subscription renewal`);
+          await handleSubscriptionRenewed(data, requestId);
+          handlerResult = { success: true, message: 'Subscription renewed successfully' };
+          break;
+          
+        case WEBHOOK_EVENTS.PAYMENT_SUCCEEDED:
+          console.log(`💰 [${requestId}] Processing payment.succeeded`);
+          await handlePaymentSucceeded(data, requestId);
+          handlerResult = { success: true, message: 'Payment processed successfully' };
+          break;
+          
+        case WEBHOOK_EVENTS.SUBSCRIPTION_CANCELED:
+          console.log(`❌ [${requestId}] Processing subscription.canceled`);
+          await handleSubscriptionCanceled(data, requestId);
+          handlerResult = { success: true, message: 'Subscription cancellation processed' };
+          break;
+          
+        case WEBHOOK_EVENTS.PAYMENT_FAILED:
+          console.log(`💸 [${requestId}] Processing payment.failed`);
+          await handlePaymentFailed(data, requestId);
+          handlerResult = { success: true, message: 'Payment failure tracked' };
+          break;
+          
+        default:
+          console.log(`❓ [${requestId}] Unhandled webhook type:`, type);
+          handlerResult = { success: true, message: `Unhandled event type: ${type}` };
+      }
+    } catch (handlerError) {
+      console.error(`❌ [${requestId}] Handler error for ${type}:`, handlerError);
+      // Don't fail the webhook for handler errors - return success to prevent retries
+      handlerResult = { success: true, message: `Handler error logged for ${type}` };
+    }
+
+    console.log(`✅ [${requestId}] Webhook processing completed:`, handlerResult.message);
+    
     return NextResponse.json({ 
       success: true, 
-      message: `Processed ${type} event in production`,
+      message: handlerResult.message,
+      type: type,
+      requestId: requestId,
       timestamp: new Date().toISOString()
     });
 
   } catch (error: any) {
-    console.error('❌ PRODUCTION WEBHOOK ERROR:', error);
-    console.error('Error stack:', error.stack);
+    console.error(`❌ [${requestId}] Critical webhook error:`, error);
     return NextResponse.json(
       { 
-        error: 'Webhook processing failed',
-        message: error.message,
+        error: 'Internal webhook processing error',
+        requestId: requestId,
         timestamp: new Date().toISOString()
       },
       { status: 500 }
@@ -164,75 +228,97 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Enhanced subscription handler with more logging
-async function handleSubscriptionCreated(data: WebhookPayload['data']) {
-  console.log('📝 PRODUCTION: handleSubscriptionCreated called');
-  
+async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId: string) {
   if (!supabaseAdmin) {
-    console.error('❌ PRODUCTION: supabaseAdmin not available');
-    return;
-  }
-  
-  const { subscription } = data;
-  if (!subscription) {
-    console.error('❌ PRODUCTION: No subscription data in webhook');
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionCreated`);
     return;
   }
 
-  console.log('📊 PRODUCTION: Subscription data:', {
-    subscription_id: subscription.subscription_id,
-    customer_id: subscription.customer_id,
-    product_id: subscription.product_id,
+  const { subscription } = data;
+  if (!subscription) {
+    console.error(`❌ [${requestId}] No subscription data in webhook payload`);
+    return;
+  }
+
+  console.log(`📝 [${requestId}] Processing subscription created:`, {
+    subscriptionId: subscription.subscription_id,
+    customerId: subscription.customer_id,
+    productId: subscription.product_id,
     status: subscription.status,
     metadata: subscription.metadata
   });
 
-  const { user_id: userId, plan } = subscription.metadata || {};
+  const { user_id: userId, plan, is_plan_change } = subscription.metadata || {};
+  
   if (!userId) {
-    console.error('❌ PRODUCTION: No user_id in subscription metadata');
+    console.error(`❌ [${requestId}] No user_id in subscription metadata:`, subscription.metadata);
     return;
   }
 
-  console.log('👤 PRODUCTION: Processing for user:', userId, 'plan:', plan);
-
   try {
-    // Get user email for tracking
+    // Fetch user details
     const { data: user, error: userError } = await supabaseAdmin
       .from('users')
-      .select('email')
+      .select('email, subscription_tier, is_paid')
       .eq('id', userId)
       .single();
 
-    if (userError) {
-      console.error('❌ PRODUCTION: Error fetching user:', userError);
+    if (userError || !user) {
+      console.error(`❌ [${requestId}] Error fetching user:`, userError);
       return;
     }
 
-    const userEmail = user?.email || 'unknown';
-    console.log('📧 PRODUCTION: User email:', userEmail);
+    const userEmail = user.email;
+    const isUpgrade = is_plan_change === 'true';
+    
+    console.log(`👤 [${requestId}] User details:`, { 
+      userId, 
+      userEmail, 
+      currentTier: user.subscription_tier,
+      newPlan: plan,
+      isUpgrade 
+    });
 
     // Update user subscription status
-    console.log('📝 PRODUCTION: Updating user subscription status');
-    const userUpdateResult = await supabaseAdmin
+    const userUpdateData = {
+      is_paid: true,
+      subscription_status: 'active',
+      subscription_tier: plan || 'individual',
+      subscription_ends_at: subscription.current_period_end,
+      dodo_customer_id: subscription.customer_id,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error: userUpdateError } = await supabaseAdmin
       .from('users')
-      .update({
-        is_paid: true,
-        subscription_status: 'active',
-        subscription_tier: plan || 'individual',
-        subscription_ends_at: subscription.current_period_end,
-        dodo_customer_id: subscription.customer_id
-      })
+      .update(userUpdateData)
       .eq('id', userId);
 
-    if (userUpdateResult.error) {
-      console.error('❌ PRODUCTION: Error updating user:', userUpdateResult.error);
-    } else {
-      console.log('✅ PRODUCTION: User updated successfully');
+    if (userUpdateError) {
+      console.error(`❌ [${requestId}] Error updating user:`, userUpdateError);
+      throw userUpdateError;
     }
 
-    // Create subscription record
-    console.log('📝 PRODUCTION: Creating subscription record');
-    // Check if subscription already exists
+    console.log(`✅ [${requestId}] User updated successfully`);
+
+    // Handle subscription record - upsert pattern
+    const subscriptionData = {
+      user_id: userId,
+      plan: plan || 'individual',
+      status: 'active',
+      dodo_customer_id: subscription.customer_id,
+      dodo_subscription_id: subscription.subscription_id,
+      dodo_product_id: subscription.product_id,
+      current_period_start: subscription.current_period_start,
+      current_period_end: subscription.current_period_end,
+      cancel_at_period_end: subscription.cancel_at_period_end || false,
+      billing_interval: 'monthly',
+      expires_at: subscription.current_period_end,
+      price_cents: plan === 'business' ? 1999 : 999,
+      updated_at: new Date().toISOString()
+    };
+
+    // Check for existing subscription
     const { data: existingSubscription } = await supabaseAdmin
       .from('subscriptions')
       .select('id')
@@ -241,101 +327,104 @@ async function handleSubscriptionCreated(data: WebhookPayload['data']) {
 
     let subscriptionResult;
     if (existingSubscription) {
-      // Update existing
+      // Update existing subscription
       subscriptionResult = await supabaseAdmin
         .from('subscriptions')
-        .update({
-          plan: plan || 'individual',
-          status: 'active',
-          dodo_customer_id: subscription.customer_id,
-          dodo_subscription_id: subscription.subscription_id,
-          dodo_product_id: subscription.product_id,
-          current_period_start: subscription.current_period_start,
-          current_period_end: subscription.current_period_end,
-          cancel_at_period_end: subscription.cancel_at_period_end,
-          billing_interval: 'monthly',
-          expires_at: subscription.current_period_end,
-          price_cents: plan === 'business' ? 1999 : 999,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', userId);
+        .update(subscriptionData)
+        .eq('user_id', userId)
+        .select()
+        .single();
     } else {
-      // Create new
+      // Create new subscription
       subscriptionResult = await supabaseAdmin
         .from('subscriptions')
         .insert({
-          user_id: userId,
-          plan: plan || 'individual',
-          status: 'active',
-          dodo_customer_id: subscription.customer_id,
-          dodo_subscription_id: subscription.subscription_id,
-          dodo_product_id: subscription.product_id,
-          current_period_start: subscription.current_period_start,
-          current_period_end: subscription.current_period_end,
-          cancel_at_period_end: subscription.cancel_at_period_end,
-          billing_interval: 'monthly',
-          started_at: new Date().toISOString(),
-          expires_at: subscription.current_period_end,
-          price_cents: plan === 'business' ? 1999 : 999
-        });
+          ...subscriptionData,
+          started_at: new Date().toISOString()
+        })
+        .select()
+        .single();
     }
 
     if (subscriptionResult.error) {
-      console.error('❌ PRODUCTION: Error with subscription record:', subscriptionResult.error);
-    } else {
-      console.log('✅ PRODUCTION: Subscription record processed successfully');
+      console.error(`❌ [${requestId}] Error upserting subscription:`, subscriptionResult.error);
+      throw subscriptionResult.error;
     }
 
-    console.log('✅ PRODUCTION: Subscription created successfully for user:', userId);
+    console.log(`✅ [${requestId}] Subscription record processed successfully`);
+
+    // Track the event
+    const eventName = isUpgrade ? 'subscription_upgraded' : 'subscription_created';
+    await captureEvent(userEmail, eventName, {
+      plan: plan || 'individual',
+      subscription_id: subscription.subscription_id,
+      customer_id: subscription.customer_id,
+      current_period_end: subscription.current_period_end,
+      user_id: userId,
+      is_upgrade: isUpgrade,
+      previous_tier: user.subscription_tier
+    });
+
+    console.log(`✅ [${requestId}] Subscription ${eventName} completed for user:`, userId);
 
   } catch (error) {
-    console.error('❌ PRODUCTION: Error in handleSubscriptionCreated:', error);
+    console.error(`❌ [${requestId}] Error in handleSubscriptionCreated:`, error);
+    throw error;
   }
 }
 
+async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionRenewed`);
+    return;
+  }
 
-
-async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
-  if (!supabaseAdmin) return;
-  
   const { subscription } = data;
-  if (!subscription) return;
+  if (!subscription) {
+    console.error(`❌ [${requestId}] No subscription data for renewal`);
+    return;
+  }
 
-  console.log('🔄 Processing subscription renewal:', subscription.subscription_id);
+  console.log(`🔄 [${requestId}] Processing subscription renewal:`, subscription.subscription_id);
 
   try {
     // Update subscription record
-    const subscriptionUpdateResult = await supabaseAdmin
+    const { error: subscriptionError } = await supabaseAdmin
       .from('subscriptions')
       .update({
         current_period_start: subscription.current_period_start,
         current_period_end: subscription.current_period_end,
         expires_at: subscription.current_period_end,
-        status: 'active'
+        status: 'active',
+        updated_at: new Date().toISOString()
       })
       .eq('dodo_subscription_id', subscription.subscription_id);
 
-    if (subscriptionUpdateResult.error) {
-      console.error('❌ Error updating subscription on renewal:', subscriptionUpdateResult.error);
+    if (subscriptionError) {
+      console.error(`❌ [${requestId}] Error updating subscription:`, subscriptionError);
+      throw subscriptionError;
     }
 
     // Update user subscription end date
-    const userUpdateResult = await supabaseAdmin
+    const { error: userError } = await supabaseAdmin
       .from('users')
       .update({
         subscription_ends_at: subscription.current_period_end,
-        subscription_status: 'active'
+        subscription_status: 'active',
+        is_paid: true,
+        updated_at: new Date().toISOString()
       })
       .eq('dodo_customer_id', subscription.customer_id);
 
-    if (userUpdateResult.error) {
-      console.error('❌ Error updating user on renewal:', userUpdateResult.error);
+    if (userError) {
+      console.error(`❌ [${requestId}] Error updating user on renewal:`, userError);
+      throw userError;
     }
 
     // Get user for tracking
     const { data: user } = await supabaseAdmin
       .from('users')
-      .select('email, id')
+      .select('email, id, subscription_tier')
       .eq('dodo_customer_id', subscription.customer_id)
       .single();
 
@@ -343,30 +432,43 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data']) {
       await captureEvent(user.email, 'subscription_renewed', {
         subscription_id: subscription.subscription_id,
         current_period_end: subscription.current_period_end,
+        plan: user.subscription_tier,
         user_id: user.id
       });
     }
 
-    console.log('✅ Subscription renewed successfully:', subscription.subscription_id);
+    console.log(`✅ [${requestId}] Subscription renewed successfully:`, subscription.subscription_id);
 
   } catch (error) {
-    console.error('❌ Error handling subscription renewed:', error);
+    console.error(`❌ [${requestId}] Error in handleSubscriptionRenewed:`, error);
+    throw error;
   }
 }
 
-async function handlePaymentSucceeded(data: WebhookPayload['data']) {
-  if (!supabaseAdmin) return;
-  
-  const { payment } = data;
-  if (!payment) return;
+async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentSucceeded`);
+    return;
+  }
 
-  console.log('💰 Processing payment success:', payment.payment_id);
+  const { payment } = data;
+  if (!payment) {
+    console.error(`❌ [${requestId}] No payment data in webhook`);
+    return;
+  }
+
+  console.log(`💰 [${requestId}] Processing payment success:`, {
+    paymentId: payment.payment_id,
+    amount: payment.amount,
+    currency: payment.currency,
+    subscriptionId: payment.subscription_id
+  });
 
   try {
     // Get user for tracking
     const { data: user } = await supabaseAdmin
       .from('users')
-      .select('email, id')
+      .select('email, id, subscription_tier')
       .eq('dodo_customer_id', payment.customer_id)
       .single();
 
@@ -376,60 +478,78 @@ async function handlePaymentSucceeded(data: WebhookPayload['data']) {
         amount: payment.amount,
         currency: payment.currency,
         subscription_id: payment.subscription_id,
+        plan: user.subscription_tier,
         user_id: user.id
       });
+      
+      console.log(`✅ [${requestId}] Payment success tracked for user:`, user.id);
+    } else {
+      console.warn(`⚠️ [${requestId}] User not found for payment tracking`);
     }
 
-    console.log('✅ Payment succeeded tracking completed:', payment.payment_id);
-
   } catch (error) {
-    console.error('❌ Error handling payment succeeded:', error);
+    console.error(`❌ [${requestId}] Error in handlePaymentSucceeded:`, error);
+    throw error;
   }
 }
 
-async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
-  if (!supabaseAdmin) return;
-  
-  const { subscription } = data;
-  if (!subscription) return;
+async function handleSubscriptionCanceled(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionCanceled`);
+    return;
+  }
 
-  console.log('❌ Processing subscription cancellation:', subscription.subscription_id);
+  const { subscription } = data;
+  if (!subscription) {
+    console.error(`❌ [${requestId}] No subscription data for cancellation`);
+    return;
+  }
+
+  console.log(`❌ [${requestId}] Processing subscription cancellation:`, {
+    subscriptionId: subscription.subscription_id,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    canceledAt: subscription.canceled_at
+  });
 
   try {
     // Update subscription status
-    const subscriptionUpdateResult = await supabaseAdmin
+    const { error: subscriptionError } = await supabaseAdmin
       .from('subscriptions')
       .update({
         status: 'canceled',
         canceled_at: subscription.canceled_at || new Date().toISOString(),
-        cancel_at_period_end: subscription.cancel_at_period_end
+        cancel_at_period_end: subscription.cancel_at_period_end,
+        updated_at: new Date().toISOString()
       })
       .eq('dodo_subscription_id', subscription.subscription_id);
 
-    if (subscriptionUpdateResult.error) {
-      console.error('❌ Error updating subscription on cancellation:', subscriptionUpdateResult.error);
+    if (subscriptionError) {
+      console.error(`❌ [${requestId}] Error updating subscription:`, subscriptionError);
+      throw subscriptionError;
     }
 
-    // If canceled immediately, update user status
+    // If canceled immediately (not at period end), update user status
     if (!subscription.cancel_at_period_end) {
-      const userUpdateResult = await supabaseAdmin
+      const { error: userError } = await supabaseAdmin
         .from('users')
         .update({
           is_paid: false,
           subscription_status: 'canceled',
-          subscription_tier: 'free'
+          subscription_tier: 'free',
+          updated_at: new Date().toISOString()
         })
         .eq('dodo_customer_id', subscription.customer_id);
 
-      if (userUpdateResult.error) {
-        console.error('❌ Error updating user on immediate cancellation:', userUpdateResult.error);
+      if (userError) {
+        console.error(`❌ [${requestId}] Error updating user on cancellation:`, userError);
+        throw userError;
       }
     }
 
     // Get user for tracking
     const { data: user } = await supabaseAdmin
       .from('users')
-      .select('email, id')
+      .select('email, id, subscription_tier')
       .eq('dodo_customer_id', subscription.customer_id)
       .single();
 
@@ -438,30 +558,42 @@ async function handleSubscriptionCanceled(data: WebhookPayload['data']) {
         subscription_id: subscription.subscription_id,
         cancel_at_period_end: subscription.cancel_at_period_end,
         canceled_at: subscription.canceled_at,
+        immediate_cancellation: !subscription.cancel_at_period_end,
         user_id: user.id
       });
     }
 
-    console.log('✅ Subscription cancellation processed:', subscription.subscription_id);
+    console.log(`✅ [${requestId}] Subscription cancellation processed:`, subscription.subscription_id);
 
   } catch (error) {
-    console.error('❌ Error handling subscription canceled:', error);
+    console.error(`❌ [${requestId}] Error in handleSubscriptionCanceled:`, error);
+    throw error;
   }
 }
 
-async function handlePaymentFailed(data: WebhookPayload['data']) {
-  if (!supabaseAdmin) return;
-  
-  const { payment } = data;
-  if (!payment) return;
+async function handlePaymentFailed(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentFailed`);
+    return;
+  }
 
-  console.log('💸 Processing payment failure:', payment.payment_id);
+  const { payment } = data;
+  if (!payment) {
+    console.error(`❌ [${requestId}] No payment data for failure`);
+    return;
+  }
+
+  console.log(`💸 [${requestId}] Processing payment failure:`, {
+    paymentId: payment.payment_id,
+    amount: payment.amount,
+    subscriptionId: payment.subscription_id
+  });
 
   try {
     // Get user for tracking
     const { data: user } = await supabaseAdmin
       .from('users')
-      .select('email, id')
+      .select('email, id, subscription_tier')
       .eq('dodo_customer_id', payment.customer_id)
       .single();
 
@@ -471,13 +603,17 @@ async function handlePaymentFailed(data: WebhookPayload['data']) {
         amount: payment.amount,
         currency: payment.currency,
         subscription_id: payment.subscription_id,
+        plan: user.subscription_tier,
         user_id: user.id
       });
+      
+      console.log(`✅ [${requestId}] Payment failure tracked for user:`, user.id);
+    } else {
+      console.warn(`⚠️ [${requestId}] User not found for payment failure tracking`);
     }
 
-    console.log('✅ Payment failure tracking completed:', payment.payment_id);
-
   } catch (error) {
-    console.error('❌ Error handling payment failed:', error);
+    console.error(`❌ [${requestId}] Error in handlePaymentFailed:`, error);
+    throw error;
   }
 }
