@@ -182,6 +182,7 @@ export function Navbar() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isClient, setIsClient] = useState(false)
   const { isDark, toggleDarkMode, mounted } = useDarkMode()
+  
 
   useEffect(() => {
     setIsClient(true)
