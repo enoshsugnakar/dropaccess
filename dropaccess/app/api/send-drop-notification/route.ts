@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate access link
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://dropaccess.net';
     const accessLink = `${baseUrl}/drops/${dropId}`;
 
     // Determine timer mode and format expiry info
