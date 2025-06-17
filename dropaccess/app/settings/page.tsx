@@ -281,16 +281,27 @@ function ProfileAndAccountTab() {
   )
 }
 
-// Subscription Tab Component
+// Subscription Tab Component - FIXED VERSION
 function SubscriptionTab() {
+  const { user } = useAuth() // Move useAuth to component level
   const { usageData, subscriptionData, userTier, loading, refreshData, error } = useSubscription()
   const [upgrading, setUpgrading] = useState<string | null>(null)
 
   const handleUpgrade = async (planName: string) => {
-    const { user } = useAuth()
+    // Validate user is available
+    if (!user?.id || !user?.email) {
+      toast.error('User authentication required. Please log in again.')
+      return
+    }
     
     try {
       setUpgrading(planName)
+      
+      console.log('Creating payment for:', {
+        plan: planName.toLowerCase(),
+        userId: user.id,
+        userEmail: user.email
+      })
       
       const response = await fetch('/api/payments/create', {
         method: 'POST',
@@ -299,26 +310,30 @@ function SubscriptionTab() {
         },
         body: JSON.stringify({
           plan: planName.toLowerCase(),
-          userId: user!.id,
-          userEmail: user!.email
+          userId: user.id,
+          userEmail: user.email
         }),
       })
 
-      const data = await response.json()
-
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create payment link')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to create payment link`)
       }
 
+      const data = await response.json()
+      console.log('Payment response:', data)
+
       if (data.payment_link) {
+        console.log('Redirecting to payment:', data.payment_link)
+        // Use window.open for better debugging, then switch to location.href
         window.location.href = data.payment_link
       } else {
-        throw new Error('No payment link received')
+        throw new Error('No payment link received from server')
       }
 
     } catch (err: any) {
       console.error('Payment error:', err)
-      toast.error(err.message || 'Something went wrong')
+      toast.error(err.message || 'Failed to create payment link. Please try again.')
     } finally {
       setUpgrading(null)
     }
@@ -454,6 +469,16 @@ function SubscriptionTab() {
           )}
         </div>
 
+        {/* Debug Info - Remove in production */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <h4 className="font-medium text-yellow-800">Debug Info:</h4>
+            <p className="text-sm text-yellow-700">User ID: {user?.id}</p>
+            <p className="text-sm text-yellow-700">User Email: {user?.email}</p>
+            <p className="text-sm text-yellow-700">Current Tier: {userTier}</p>
+          </div>
+        )}
+
         {/* Upgrade Options */}
         {userTier === 'free' && (
           <div className="space-y-4">
@@ -487,12 +512,16 @@ function SubscriptionTab() {
                     <Button 
                       onClick={() => handleUpgrade('individual')} 
                       className="w-full"
-                      disabled={upgrading === 'individual'}
+                      disabled={upgrading === 'individual' || !user?.id}
                     >
                       {upgrading === 'individual' ? (
-                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      ) : null}
-                      Upgrade to Individual
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          Creating Payment...
+                        </>
+                      ) : (
+                        'Upgrade to Individual'
+                      )}
                     </Button>
                   </div>
                 </CardContent>
@@ -526,12 +555,16 @@ function SubscriptionTab() {
                     <Button 
                       onClick={() => handleUpgrade('business')} 
                       className="w-full"
-                      disabled={upgrading === 'business'}
+                      disabled={upgrading === 'business' || !user?.id}
                     >
                       {upgrading === 'business' ? (
-                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      ) : null}
-                      Upgrade to Business
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          Creating Payment...
+                        </>
+                      ) : (
+                        'Upgrade to Business'
+                      )}
                     </Button>
                   </div>
                 </CardContent>
