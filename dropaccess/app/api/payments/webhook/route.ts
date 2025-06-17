@@ -660,6 +660,11 @@ async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId
 }
 
 async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentSucceeded`);
+    return;
+  }
+
   console.log(`💰 [${requestId}] Payment succeeded - tracking only`);
   // Just track the event, don't modify subscription
   const customerId = data.customer?.customer_id;
@@ -689,6 +694,11 @@ async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: s
 }
 
 async function handleSubscriptionCanceled(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionCanceled`);
+    return;
+  }
+
   console.log(`❌ [${requestId}] Subscription canceled - updating to free tier`);
   
   const customerId = data.customer?.customer_id;
@@ -717,6 +727,11 @@ async function handleSubscriptionCanceled(data: WebhookPayload['data'], requestI
 }
 
 async function handlePaymentFailed(data: WebhookPayload['data'], requestId: string) {
+  if (!supabaseAdmin) {
+    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentFailed`);
+    return;
+  }
+
   console.log(`💸 [${requestId}] Payment failed - tracking only`);
   // Just track the event
   const customerId = data.customer?.customer_id;
