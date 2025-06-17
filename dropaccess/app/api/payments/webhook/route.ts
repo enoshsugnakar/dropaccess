@@ -185,9 +185,10 @@ export async function POST(request: NextRequest) {
 
     console.log(`📄 [${requestId}] Parsed webhook payload:`, {
       type: payload.type,
-      subscriptionId: payload.data?.subscription?.subscription_id,
-      paymentId: payload.data?.payment?.payment_id,
-      customerId: payload.data?.subscription?.customer_id || payload.data?.payment?.customer_id
+      subscriptionId: payload.data?.subscription_id,
+      paymentId: payload.data?.payment_id,
+      customerId: payload.data?.customer?.customer_id,
+      userId: payload.data?.metadata?.user_id
     });
 
     // Verify webhook signature - CRITICAL for security
@@ -338,19 +339,70 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
   }
 
   try {
-    // Fetch user details
+    // STEP 1: Test database connection
+    console.log(`🔍 [${requestId}] Testing database connection...`);
+    const { data: testQuery, error: testError } = await supabaseAdmin
+      .from('users')
+      .select('count')
+      .limit(1);
+    
+    if (testError) {
+      console.error(`❌ [${requestId}] Database connection test failed:`, testError);
+      throw new Error(`Database connection failed: ${testError.message}`);
+    }
+    console.log(`✅ [${requestId}] Database connection successful`);
+
+    // STEP 2: Check if user exists before fetching details
+    console.log(`🔍 [${requestId}] Checking if user exists: ${userId}`);
+    const { data: userExists, error: userExistsError } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .single();
+
+    if (userExistsError) {
+      console.error(`❌ [${requestId}] User existence check failed:`, userExistsError);
+      
+      // If user doesn't exist, create them first
+      if (userExistsError.code === 'PGRST116') {
+        console.log(`📝 [${requestId}] User not found, creating user: ${userId}`);
+        
+        const { data: newUser, error: createUserError } = await supabaseAdmin
+          .from('users')
+          .insert({
+            id: userId,
+            email: userEmail || 'unknown@email.com',
+            is_paid: false,
+            subscription_status: 'free',
+            subscription_tier: 'free'
+          })
+          .select()
+          .single();
+
+        if (createUserError) {
+          console.error(`❌ [${requestId}] Failed to create user:`, createUserError);
+          throw createUserError;
+        }
+        console.log(`✅ [${requestId}] User created successfully:`, newUser);
+      } else {
+        throw userExistsError;
+      }
+    }
+
+    // STEP 3: Fetch user details
+    console.log(`🔍 [${requestId}] Fetching user details: ${userId}`);
     const { data: user, error: userError } = await supabaseAdmin
       .from('users')
-      .select('email, subscription_tier, is_paid')
+      .select('email, subscription_tier, is_paid, dodo_customer_id')
       .eq('id', userId)
       .single();
 
     if (userError || !user) {
-      console.error(`❌ [${requestId}] Error fetching user:`, userError);
-      return;
+      console.error(`❌ [${requestId}] Error fetching user after creation:`, userError);
+      throw userError || new Error('User not found after creation');
     }
 
-    const finalUserEmail = user.email || userEmail;
+    const finalUserEmail = user.email || userEmail || 'unknown@email.com';
     const isUpgrade = is_plan_change === 'true';
     
     console.log(`👤 [${requestId}] User details:`, { 
@@ -358,10 +410,11 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       userEmail: finalUserEmail, 
       currentTier: user.subscription_tier,
       newPlan: plan,
-      isUpgrade 
+      isUpgrade,
+      existingDodoCustomerId: user.dodo_customer_id
     });
 
-    // Update user subscription status
+    // STEP 4: Update user subscription status with detailed logging
     const userUpdateData = {
       is_paid: true,
       subscription_status: 'active',
@@ -371,19 +424,44 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       updated_at: new Date().toISOString()
     };
 
-    const { error: userUpdateError } = await supabaseAdmin
+    console.log(`📝 [${requestId}] Updating user with data:`, userUpdateData);
+
+    const { data: updatedUser, error: userUpdateError } = await supabaseAdmin
       .from('users')
       .update(userUpdateData)
-      .eq('id', userId);
+      .eq('id', userId)
+      .select('id, subscription_tier, is_paid, subscription_status, dodo_customer_id');
 
     if (userUpdateError) {
       console.error(`❌ [${requestId}] Error updating user:`, userUpdateError);
+      console.error(`❌ [${requestId}] Update data that failed:`, userUpdateData);
+      console.error(`❌ [${requestId}] User ID that failed:`, userId);
       throw userUpdateError;
     }
 
-    console.log(`✅ [${requestId}] User updated successfully`);
+    console.log(`✅ [${requestId}] User updated successfully:`, updatedUser);
 
-    // Handle subscription record - upsert pattern
+    // STEP 5: Verify the update worked
+    const { data: verifyUser, error: verifyError } = await supabaseAdmin
+      .from('users')
+      .select('subscription_tier, is_paid, subscription_status, dodo_customer_id')
+      .eq('id', userId)
+      .single();
+
+    if (verifyError) {
+      console.error(`❌ [${requestId}] Error verifying user update:`, verifyError);
+    } else {
+      console.log(`🔍 [${requestId}] User verification after update:`, verifyUser);
+      
+      // Check if the update actually worked
+      if (verifyUser.subscription_tier !== (plan || 'individual')) {
+        console.error(`❌ [${requestId}] User tier not updated! Expected: ${plan || 'individual'}, Got: ${verifyUser.subscription_tier}`);
+      } else {
+        console.log(`✅ [${requestId}] User tier successfully updated to: ${verifyUser.subscription_tier}`);
+      }
+    }
+
+    // STEP 6: Handle subscription record - upsert pattern
     const subscriptionData = {
       user_id: userId,
       plan: plan || 'individual',
@@ -399,6 +477,8 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
       price_cents: plan === 'business' ? 1999 : 999,
       updated_at: new Date().toISOString()
     };
+
+    console.log(`📝 [${requestId}] Creating/updating subscription record:`, subscriptionData);
 
     // Check for existing subscription
     const { data: existingSubscription } = await supabaseAdmin
@@ -430,27 +510,34 @@ async function handleSubscriptionCreated(data: WebhookPayload['data'], requestId
 
     if (subscriptionResult.error) {
       console.error(`❌ [${requestId}] Error upserting subscription:`, subscriptionResult.error);
-      throw subscriptionResult.error;
+      // Don't throw here, user update is more important
+    } else {
+      console.log(`✅ [${requestId}] Subscription record processed successfully`);
     }
 
-    console.log(`✅ [${requestId}] Subscription record processed successfully`);
+    // STEP 7: Track the event
+    try {
+      const eventName = isUpgrade ? 'subscription_upgraded' : 'subscription_created';
+      await captureEvent(finalUserEmail, eventName, {
+        plan: plan || 'individual',
+        subscription_id: subscription.subscription_id,
+        customer_id: customerId,
+        current_period_end: subscription.current_period_end,
+        user_id: userId,
+        is_upgrade: isUpgrade,
+        previous_tier: user.subscription_tier
+      });
+      console.log(`✅ [${requestId}] Event tracked: ${eventName}`);
+    } catch (trackingError) {
+      console.error(`❌ [${requestId}] Event tracking failed:`, trackingError);
+      // Don't throw, tracking is not critical
+    }
 
-    // Track the event
-    const eventName = isUpgrade ? 'subscription_upgraded' : 'subscription_created';
-    await captureEvent(finalUserEmail, eventName, {
-      plan: plan || 'individual',
-      subscription_id: subscription.subscription_id,
-      customer_id: customerId,
-      current_period_end: subscription.current_period_end,
-      user_id: userId,
-      is_upgrade: isUpgrade,
-      previous_tier: user.subscription_tier
-    });
-
-    console.log(`✅ [${requestId}] Subscription ${eventName} completed for user:`, userId);
+    console.log(`✅ [${requestId}] Subscription ${isUpgrade ? 'upgrade' : 'creation'} completed for user: ${userId}`);
 
   } catch (error) {
-    console.error(`❌ [${requestId}] Error in handleSubscriptionCreated:`, error);
+    console.error(`❌ [${requestId}] Critical error in handleSubscriptionCreated:`, error);
+    console.error(`❌ [${requestId}] Error stack:`, error instanceof Error ? error.stack : 'No stack');
     throw error;
   }
 }
@@ -492,9 +579,20 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
   });
 
   try {
-    // subscription.active typically means the subscription is now active after payment
-    // This is similar to subscription.created but for existing subscriptions that became active
-    
+    // Find user by dodo_customer_id
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('users')
+      .select('id, email, subscription_tier')
+      .eq('dodo_customer_id', customerId)
+      .single();
+
+    if (userError || !user) {
+      console.error(`❌ [${requestId}] User not found for customer_id ${customerId}:`, userError);
+      return;
+    }
+
+    console.log(`👤 [${requestId}] Found user for activation:`, user);
+
     // Update subscription status to active
     const { error: subscriptionError } = await supabaseAdmin
       .from('subscriptions')
@@ -509,11 +607,12 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
 
     if (subscriptionError) {
       console.error(`❌ [${requestId}] Error updating subscription to active:`, subscriptionError);
-      throw subscriptionError;
+    } else {
+      console.log(`✅ [${requestId}] Subscription updated to active`);
     }
 
     // Update user status to active/paid
-    const { error: userError } = await supabaseAdmin
+    const { error: userUpdateError } = await supabaseAdmin
       .from('users')
       .update({
         is_paid: true,
@@ -522,21 +621,17 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
         dodo_customer_id: customerId,
         updated_at: new Date().toISOString()
       })
-      .eq('dodo_customer_id', customerId);
+      .eq('id', user.id);
 
-    if (userError) {
-      console.error(`❌ [${requestId}] Error updating user to active:`, userError);
-      throw userError;
+    if (userUpdateError) {
+      console.error(`❌ [${requestId}] Error updating user to active:`, userUpdateError);
+      throw userUpdateError;
     }
 
-    // Get user for tracking
-    const { data: user } = await supabaseAdmin
-      .from('users')
-      .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', customerId)
-      .single();
+    console.log(`✅ [${requestId}] User updated to active status`);
 
-    if (user) {
+    // Track activation
+    try {
       await captureEvent(user.email, 'subscription_activated', {
         subscription_id: subscription.subscription_id,
         status: subscription.status,
@@ -544,8 +639,9 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
         plan: user.subscription_tier,
         user_id: user.id
       });
-      
       console.log(`✅ [${requestId}] Subscription activation tracked for user:`, user.id);
+    } catch (trackingError) {
+      console.error(`❌ [${requestId}] Tracking failed:`, trackingError);
     }
 
     console.log(`✅ [${requestId}] Subscription activated successfully:`, subscription.subscription_id);
@@ -556,280 +652,95 @@ async function handleSubscriptionActive(data: WebhookPayload['data'], requestId:
   }
 }
 
+// Placeholder functions for other webhook events
 async function handleSubscriptionRenewed(data: WebhookPayload['data'], requestId: string) {
-  if (!supabaseAdmin) {
-    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionRenewed`);
-    return;
-  }
+  console.log(`🔄 [${requestId}] Subscription renewed - handling similar to creation`);
+  // Use same logic as subscription created
+  await handleSubscriptionCreated(data, requestId);
+}
 
-  // Extract subscription data from actual Dodo payload structure
-  const customerId = data.customer?.customer_id || data.customer_id;
+async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: string) {
+  console.log(`💰 [${requestId}] Payment succeeded - tracking only`);
+  // Just track the event, don't modify subscription
+  const customerId = data.customer?.customer_id;
+  if (customerId) {
+    try {
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('email, id, subscription_tier')
+        .eq('dodo_customer_id', customerId)
+        .single();
+
+      if (user) {
+        await captureEvent(user.email, 'payment_succeeded', {
+          payment_id: data.payment_id,
+          amount: data.total_amount || data.amount,
+          currency: data.currency,
+          subscription_id: data.subscription_id,
+          plan: user.subscription_tier,
+          user_id: user.id
+        });
+        console.log(`✅ [${requestId}] Payment success tracked for user:`, user.id);
+      }
+    } catch (error) {
+      console.error(`❌ [${requestId}] Error tracking payment:`, error);
+    }
+  }
+}
+
+async function handleSubscriptionCanceled(data: WebhookPayload['data'], requestId: string) {
+  console.log(`❌ [${requestId}] Subscription canceled - updating to free tier`);
   
-  const subscription = data.subscription || {
-    subscription_id: data.subscription_id!,
-    customer_id: customerId!,
-    product_id: data.product_id!,
-    status: data.status!,
-    current_period_start: data.previous_billing_date || data.current_period_start!,
-    current_period_end: data.next_billing_date || data.current_period_end!,
-    cancel_at_period_end: data.cancel_at_next_billing_date || false,
-    metadata: data.metadata
-  };
-
-  if (!subscription.subscription_id || !customerId) {
-    console.error(`❌ [${requestId}] Missing required subscription data for renewal:`, {
-      hasSubscriptionId: !!subscription.subscription_id,
-      hasCustomerId: !!customerId,
-      rawData: data
-    });
-    return;
-  }
-
-  console.log(`🔄 [${requestId}] Processing subscription renewal:`, subscription.subscription_id);
+  const customerId = data.customer?.customer_id;
+  if (!customerId) return;
 
   try {
-    // Update subscription record
-    const { error: subscriptionError } = await supabaseAdmin
-      .from('subscriptions')
-      .update({
-        current_period_start: subscription.current_period_start,
-        current_period_end: subscription.current_period_end,
-        expires_at: subscription.current_period_end,
-        status: 'active',
-        updated_at: new Date().toISOString()
-      })
-      .eq('dodo_subscription_id', subscription.subscription_id);
-
-    if (subscriptionError) {
-      console.error(`❌ [${requestId}] Error updating subscription:`, subscriptionError);
-      throw subscriptionError;
-    }
-
-    // Update user subscription end date
+    // Update user back to free tier
     const { error: userError } = await supabaseAdmin
       .from('users')
       .update({
-        subscription_ends_at: subscription.current_period_end,
-        subscription_status: 'active',
-        is_paid: true,
+        is_paid: false,
+        subscription_status: 'canceled',
+        subscription_tier: 'free',
         updated_at: new Date().toISOString()
       })
       .eq('dodo_customer_id', customerId);
 
     if (userError) {
-      console.error(`❌ [${requestId}] Error updating user on renewal:`, userError);
-      throw userError;
-    }
-
-    // Get user for tracking
-    const { data: user } = await supabaseAdmin
-      .from('users')
-      .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', customerId)
-      .single();
-
-    if (user) {
-      await captureEvent(user.email, 'subscription_renewed', {
-        subscription_id: subscription.subscription_id,
-        current_period_end: subscription.current_period_end,
-        plan: user.subscription_tier,
-        user_id: user.id
-      });
-    }
-
-    console.log(`✅ [${requestId}] Subscription renewed successfully:`, subscription.subscription_id);
-
-  } catch (error) {
-    console.error(`❌ [${requestId}] Error in handleSubscriptionRenewed:`, error);
-    throw error;
-  }
-}
-
-async function handlePaymentSucceeded(data: WebhookPayload['data'], requestId: string) {
-  if (!supabaseAdmin) {
-    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentSucceeded`);
-    return;
-  }
-
-  // Extract payment data from actual Dodo payload structure
-  const customerId = data.customer?.customer_id || data.customer_id;
-  
-  const payment = data.payment || {
-    payment_id: data.payment_id!,
-    customer_id: customerId!,
-    amount: data.total_amount || data.amount!,
-    currency: data.currency || 'USD',
-    status: data.status || 'succeeded',
-    subscription_id: data.subscription_id,
-    metadata: data.metadata
-  };
-
-  if (!payment.payment_id || !customerId) {
-    console.error(`❌ [${requestId}] Missing required payment data:`, {
-      hasPaymentId: !!payment.payment_id,
-      hasCustomerId: !!customerId,
-      rawData: data
-    });
-    return;
-  }
-
-  console.log(`💰 [${requestId}] Processing payment success:`, {
-    paymentId: payment.payment_id,
-    amount: payment.amount,
-    currency: payment.currency,
-    subscriptionId: payment.subscription_id
-  });
-
-  try {
-    // Get user for tracking
-    const { data: user } = await supabaseAdmin
-      .from('users')
-      .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', customerId)
-      .single();
-
-    if (user) {
-      await captureEvent(user.email, 'payment_succeeded', {
-        payment_id: payment.payment_id,
-        amount: payment.amount,
-        currency: payment.currency,
-        subscription_id: payment.subscription_id,
-        plan: user.subscription_tier,
-        user_id: user.id
-      });
-      
-      console.log(`✅ [${requestId}] Payment success tracked for user:`, user.id);
+      console.error(`❌ [${requestId}] Error updating user on cancellation:`, userError);
     } else {
-      console.warn(`⚠️ [${requestId}] User not found for payment tracking`);
+      console.log(`✅ [${requestId}] User updated to free tier on cancellation`);
     }
-
-  } catch (error) {
-    console.error(`❌ [${requestId}] Error in handlePaymentSucceeded:`, error);
-    throw error;
-  }
-}
-
-async function handleSubscriptionCanceled(data: WebhookPayload['data'], requestId: string) {
-  if (!supabaseAdmin) {
-    console.error(`❌ [${requestId}] supabaseAdmin not available in handleSubscriptionCanceled`);
-    return;
-  }
-
-  const { subscription } = data;
-  if (!subscription) {
-    console.error(`❌ [${requestId}] No subscription data for cancellation`);
-    return;
-  }
-
-  console.log(`❌ [${requestId}] Processing subscription cancellation:`, {
-    subscriptionId: subscription.subscription_id,
-    cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    canceledAt: subscription.canceled_at
-  });
-
-  try {
-    // Update subscription status
-    const { error: subscriptionError } = await supabaseAdmin
-      .from('subscriptions')
-      .update({
-        status: 'canceled',
-        canceled_at: subscription.canceled_at || new Date().toISOString(),
-        cancel_at_period_end: subscription.cancel_at_period_end,
-        updated_at: new Date().toISOString()
-      })
-      .eq('dodo_subscription_id', subscription.subscription_id);
-
-    if (subscriptionError) {
-      console.error(`❌ [${requestId}] Error updating subscription:`, subscriptionError);
-      throw subscriptionError;
-    }
-
-    // If canceled immediately (not at period end), update user status
-    if (!subscription.cancel_at_period_end) {
-      const { error: userError } = await supabaseAdmin
-        .from('users')
-        .update({
-          is_paid: false,
-          subscription_status: 'canceled',
-          subscription_tier: 'free',
-          updated_at: new Date().toISOString()
-        })
-        .eq('dodo_customer_id', subscription.customer_id);
-
-      if (userError) {
-        console.error(`❌ [${requestId}] Error updating user on cancellation:`, userError);
-        throw userError;
-      }
-    }
-
-    // Get user for tracking
-    const { data: user } = await supabaseAdmin
-      .from('users')
-      .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', subscription.customer_id)
-      .single();
-
-    if (user) {
-      await captureEvent(user.email, 'subscription_canceled', {
-        subscription_id: subscription.subscription_id,
-        cancel_at_period_end: subscription.cancel_at_period_end,
-        canceled_at: subscription.canceled_at,
-        immediate_cancellation: !subscription.cancel_at_period_end,
-        user_id: user.id
-      });
-    }
-
-    console.log(`✅ [${requestId}] Subscription cancellation processed:`, subscription.subscription_id);
-
   } catch (error) {
     console.error(`❌ [${requestId}] Error in handleSubscriptionCanceled:`, error);
-    throw error;
   }
 }
 
 async function handlePaymentFailed(data: WebhookPayload['data'], requestId: string) {
-  if (!supabaseAdmin) {
-    console.error(`❌ [${requestId}] supabaseAdmin not available in handlePaymentFailed`);
-    return;
-  }
+  console.log(`💸 [${requestId}] Payment failed - tracking only`);
+  // Just track the event
+  const customerId = data.customer?.customer_id;
+  if (customerId) {
+    try {
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('email, id, subscription_tier')
+        .eq('dodo_customer_id', customerId)
+        .single();
 
-  const { payment } = data;
-  if (!payment) {
-    console.error(`❌ [${requestId}] No payment data for failure`);
-    return;
-  }
-
-  console.log(`💸 [${requestId}] Processing payment failure:`, {
-    paymentId: payment.payment_id,
-    amount: payment.amount,
-    subscriptionId: payment.subscription_id
-  });
-
-  try {
-    // Get user for tracking
-    const { data: user } = await supabaseAdmin
-      .from('users')
-      .select('email, id, subscription_tier')
-      .eq('dodo_customer_id', payment.customer_id)
-      .single();
-
-    if (user) {
-      await captureEvent(user.email, 'payment_failed', {
-        payment_id: payment.payment_id,
-        amount: payment.amount,
-        currency: payment.currency,
-        subscription_id: payment.subscription_id,
-        plan: user.subscription_tier,
-        user_id: user.id
-      });
-      
-      console.log(`✅ [${requestId}] Payment failure tracked for user:`, user.id);
-    } else {
-      console.warn(`⚠️ [${requestId}] User not found for payment failure tracking`);
+      if (user) {
+        await captureEvent(user.email, 'payment_failed', {
+          payment_id: data.payment_id,
+          amount: data.total_amount || data.amount,
+          currency: data.currency,
+          subscription_id: data.subscription_id,
+          plan: user.subscription_tier,
+          user_id: user.id
+        });
+        console.log(`✅ [${requestId}] Payment failure tracked for user:`, user.id);
+      }
+    } catch (error) {
+      console.error(`❌ [${requestId}] Error tracking payment failure:`, error);
     }
-
-  } catch (error) {
-    console.error(`❌ [${requestId}] Error in handlePaymentFailed:`, error);
-    throw error;
   }
 }
