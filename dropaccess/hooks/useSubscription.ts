@@ -8,7 +8,7 @@ export function useUsageStatus() {
   const { user } = useAuth();
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string[]>([]);
 
   const refreshStatus = useCallback(async () => {
     if (!user?.id) {
