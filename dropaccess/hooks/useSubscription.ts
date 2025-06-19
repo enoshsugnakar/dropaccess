@@ -8,7 +8,7 @@ export function useUsageStatus() {
   const { user } = useAuth();
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     if (!user?.id) {
@@ -73,11 +73,16 @@ export function useUsageStatus() {
 
 export function useFormLimitValidation() {
   const { status } = useUsageStatus();
-  const [validationState, setValidationState] = useState({
-    isValid: true,
-    errors: [],
-    warnings: []
-  });
+  const [validationState, setValidationState] = useState<{
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+  upgradePrompt?: any;
+}>({
+  isValid: true,
+  errors: [],
+  warnings: []
+});
 
   const validateLimits = useCallback(async (formData: {
     recipients: string[];
