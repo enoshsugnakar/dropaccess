@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FileUp, Link2, Shield, Users, Clock, Info, Loader2, Upload, X, CheckCircle, Timer, CalendarDays } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -20,6 +20,10 @@ import toast from "react-hot-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { Navbar } from "@/components/Navbar";
 import { format, addHours } from "date-fns";
+import { useSubscription } from '@/components/SubscriptionProvider';
+import { useFormLimitValidation } from '@/hooks/useSubscription';
+import { AlertTriangle, Zap, Crown, Database, TrendingUp } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface FormData {
   name: string;
@@ -32,6 +36,112 @@ interface FormData {
   verificationDeadline: Date | undefined;
   creationExpiry: string;
   sendNotifications: boolean;
+}
+
+// Add these components BEFORE your main DropForm function
+
+function LimitValidationAlert({ 
+  validationState, 
+  onUpgrade 
+}: { 
+  validationState: any; 
+  onUpgrade: () => void;
+}) {
+  if (validationState.isValid) return null;
+
+  const upgradePrompt = validationState.upgradePrompt;
+  const isHardBlock = upgradePrompt?.type === 'hard';
+
+  return (
+    <Alert className={`mb-4 ${isHardBlock ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20'}`}>
+      <AlertTriangle className={`h-4 w-4 ${isHardBlock ? 'text-red-600' : 'text-yellow-600'}`} />
+      <AlertDescription className="flex items-center justify-between">
+        <div>
+          <p className={`font-medium ${isHardBlock ? 'text-red-800 dark:text-red-200' : 'text-yellow-800 dark:text-yellow-200'}`}>
+            {upgradePrompt?.title || 'Limit Exceeded'}
+          </p>
+          <p className={`text-sm mt-1 ${isHardBlock ? 'text-red-700 dark:text-red-300' : 'text-yellow-700 dark:text-yellow-300'}`}>
+            {upgradePrompt?.description || validationState.errors[0]}
+          </p>
+        </div>
+        <Button
+          onClick={onUpgrade}
+          size="sm"
+          className={isHardBlock ? 'bg-red-600 hover:bg-red-700' : 'bg-yellow-600 hover:bg-yellow-700'}
+        >
+          <Crown className="w-4 h-4 mr-1" />
+          {upgradePrompt?.cta || 'Upgrade'}
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function UsageMeter({ 
+  current, 
+  limit, 
+  label, 
+  icon: Icon,
+  color = 'blue'
+}: {
+  current: number;
+  limit: number;
+  label: string;
+  icon: any;
+  color?: 'blue' | 'yellow' | 'red' | 'purple' | 'green';
+}) {
+  if (limit === -1) {
+    return (
+      <div className="flex items-center gap-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+        <Icon className="w-5 h-5 text-green-600" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-green-800 dark:text-green-200">{label}</p>
+          <p className="text-xs text-green-600 dark:text-green-400">Unlimited</p>
+        </div>
+      </div>
+    );
+  }
+
+  const percentage = Math.min((current / limit) * 100, 100);
+  const isWarning = percentage >= 80;
+  const isDanger = percentage >= 100;
+
+  const colorClasses: Record<'blue' | 'yellow' | 'red' | 'purple' | 'green', string> = {
+    blue: 'text-blue-600 bg-blue-50 border-blue-200',
+    yellow: 'text-yellow-600 bg-yellow-50 border-yellow-200',
+    red: 'text-red-600 bg-red-50 border-red-200',
+    purple: 'text-purple-600 bg-purple-50 border-purple-200',
+    green: 'text-green-600 bg-green-50 border-green-200'
+  };
+
+  const bgColor: 'blue' | 'yellow' | 'red' | 'purple' | 'green' = isDanger ? 'red' : isWarning ? 'yellow' : color;
+
+  return (
+    <div className={`p-3 rounded-lg border ${colorClasses[bgColor]} dark:bg-gray-800 dark:border-gray-600`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Icon className={`w-4 h-4 ${isDanger ? 'text-red-600' : isWarning ? 'text-yellow-600' : `text-${color}-600`}`} />
+          <span className="text-sm font-medium">{label}</span>
+        </div>
+        <span className={`text-xs font-mono ${isDanger ? 'text-red-700' : isWarning ? 'text-yellow-700' : 'text-gray-600'}`}>
+          {current}/{limit}
+        </span>
+      </div>
+      <div className="space-y-1">
+        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+          <div 
+            className={`h-2 rounded-full transition-all duration-300 ${
+              isDanger ? 'bg-red-500' : isWarning ? 'bg-yellow-500' : `bg-${color}-500`
+            }`}
+            style={{ width: `${Math.min(percentage, 100)}%` }}
+          />
+        </div>
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          {Math.round(percentage)}% used
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function DropForm() {
@@ -56,6 +166,9 @@ export function DropForm() {
     creationExpiry: "",
     sendNotifications: true,
   });
+  // Add these after your existing useState declarations
+  const { usageData, userTier } = useSubscription();
+  const { validationState, validateLimits, clearValidation } = useFormLimitValidation();
 
   const updateField = (field: keyof FormData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -64,6 +177,40 @@ export function DropForm() {
       setErrors(prev => ({ ...prev, [field]: "" }));
     }
   };
+
+  // Add this useEffect for real-time validation
+useEffect(() => {
+  const validateInRealTime = async () => {
+    if (!user?.id) return;
+
+    const recipientEmails = formData.recipients
+      .split(/[,\n]/)
+      .map((email) => email.trim())
+      .filter(Boolean);
+
+    const fileSizeMb = formData.dropType === "file" && uploadedFile 
+      ? uploadedFile.size / (1024 * 1024) 
+      : 0;
+
+    if (recipientEmails.length > 0 || fileSizeMb > 0) {
+      await validateLimits({
+        recipients: recipientEmails,
+        fileSize: fileSizeMb
+      });
+    } else {
+      clearValidation();
+    }
+  };
+
+  // Debounce validation to avoid too many API calls
+  const timeoutId = setTimeout(validateInRealTime, 500);
+  return () => clearTimeout(timeoutId);
+}, [formData.recipients, uploadedFile, user?.id, validateLimits, clearValidation]);
+
+// Add upgrade handler
+const handleUpgradeClick = () => {
+  router.push('/settings');
+};
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -523,7 +670,13 @@ export function DropForm() {
           </p>
         </div>
 
+        
         <form onSubmit={handleSubmit}>
+          {/* Add this right after <form onSubmit={handleSubmit}> */}
+<LimitValidationAlert 
+  validationState={validationState}
+  onUpgrade={handleUpgradeClick}
+/>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Column - Main Content */}
             <div className="lg:col-span-2 space-y-6">

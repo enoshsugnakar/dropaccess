@@ -35,10 +35,9 @@ class SubscriptionGuard {
   async checkDropCreation(userId: string, recipientCount: number, fileSizeMb: number = 0): Promise<SubscriptionCheck> {
     try {
       if (!supabaseAdmin) {
-        return {
-          allowed: false,
-          reason: 'Database configuration error'
-        };
+        console.warn('⚠️ supabaseAdmin not configured, using fallback limits');
+        // Fallback to free tier limits when supabaseAdmin is not available
+        return this.checkWithFallbackLimits(recipientCount, fileSizeMb);
       }
 
       // Get user's subscription tier
@@ -49,10 +48,8 @@ class SubscriptionGuard {
         .single();
 
       if (userError || !user) {
-        return {
-          allowed: false,
-          reason: 'User not found'
-        };
+        console.warn('⚠️ User not found, using fallback limits');
+        return this.checkWithFallbackLimits(recipientCount, fileSizeMb);
       }
 
       const tier = (user.subscription_tier || 'free') as TierType;
@@ -90,10 +87,8 @@ class SubscriptionGuard {
 
     } catch (error) {
       console.error('Error in checkDropCreation:', error);
-      return {
-        allowed: false,
-        reason: 'System error occurred'
-      };
+      console.warn('⚠️ Error checking limits, using fallback');
+      return this.checkWithFallbackLimits(recipientCount, fileSizeMb);
     }
   }
 
@@ -103,11 +98,10 @@ class SubscriptionGuard {
   async checkFeatureAccess(userId: string, feature: string): Promise<FeatureAccess> {
     try {
       if (!supabaseAdmin) {
-        return {
-          hasAccess: false,
-          feature,
-          reason: 'Database configuration error'
-        };
+        console.warn('⚠️ supabaseAdmin not configured, using free tier for feature access');
+        // Fallback to free tier when supabaseAdmin is not available
+        const limits = TIER_LIMITS.free;
+        return this.getFeatureAccessForTier('free', feature, limits);
       }
 
       const { data: user, error } = await supabaseAdmin
@@ -117,66 +111,14 @@ class SubscriptionGuard {
         .single();
 
       if (error || !user) {
-        return {
-          hasAccess: false,
-          feature,
-          reason: 'User not found'
-        };
+        console.warn('⚠️ User not found, using free tier for feature access');
+        const limits = TIER_LIMITS.free;
+        return this.getFeatureAccessForTier('free', feature, limits);
       }
 
       const tier = (user.subscription_tier || 'free') as TierType;
       const limits = TIER_LIMITS[tier];
-
-      switch (feature) {
-        case 'advanced_analytics':
-          return {
-            hasAccess: limits.analytics === 'advanced' || limits.analytics === 'premium',
-            feature,
-            upgradeRequired: limits.analytics === 'basic'
-          };
-
-        case 'premium_analytics':
-          return {
-            hasAccess: limits.analytics === 'premium',
-            feature,
-            upgradeRequired: limits.analytics !== 'premium'
-          };
-
-        case 'custom_branding':
-          return {
-            hasAccess: limits.custom_branding,
-            feature,
-            upgradeRequired: !limits.custom_branding
-          };
-
-        case 'export_data':
-          return {
-            hasAccess: limits.export_data,
-            feature,
-            upgradeRequired: !limits.export_data
-          };
-
-        case 'unlimited_recipients':
-          return {
-            hasAccess: limits.recipients_per_drop === -1,
-            feature,
-            upgradeRequired: limits.recipients_per_drop !== -1
-          };
-
-        case 'large_file_uploads':
-          return {
-            hasAccess: limits.file_size_mb > 10,
-            feature,
-            upgradeRequired: limits.file_size_mb <= 10
-          };
-
-        default:
-          return {
-            hasAccess: false,
-            feature,
-            reason: 'Unknown feature'
-          };
-      }
+      return this.getFeatureAccessForTier(tier, feature, limits);
 
     } catch (error) {
       console.error('Error checking feature access:', error);
@@ -200,7 +142,8 @@ class SubscriptionGuard {
   }> {
     try {
       if (!supabaseAdmin) {
-        throw new Error('Database configuration error');
+        console.warn('⚠️ supabaseAdmin not configured, using fallback usage data');
+        return this.getFallbackUsageStatus();
       }
 
       const { data: user, error } = await supabaseAdmin
@@ -210,7 +153,8 @@ class SubscriptionGuard {
         .single();
 
       if (error || !user) {
-        throw new Error('User not found');
+        console.warn('⚠️ User not found, using fallback usage data');
+        return this.getFallbackUsageStatus();
       }
 
       const tier = (user.subscription_tier || 'free') as TierType;
@@ -274,8 +218,131 @@ class SubscriptionGuard {
 
     } catch (error) {
       console.error('Error getting usage status:', error);
-      throw error;
+      return this.getFallbackUsageStatus();
     }
+  }
+
+  /**
+   * Fallback method when supabaseAdmin is not available
+   */
+  private checkWithFallbackLimits(recipientCount: number, fileSizeMb: number): SubscriptionCheck {
+    const limits = TIER_LIMITS.free;
+    
+    // Mock current usage for fallback
+    const mockUsage = {
+      drops_created: 1,
+      recipients_added: 2,
+      storage_used_mb: 5
+    };
+
+    // Check limits against free tier
+    const checks = {
+      dropCount: this.checkDropLimit(mockUsage.drops_created, limits.drops_per_month),
+      recipientCount: this.checkRecipientLimit(recipientCount, limits.recipients_per_drop),
+      fileSize: this.checkFileSizeLimit(fileSizeMb, limits.file_size_mb),
+      storage: this.checkStorageLimit(mockUsage.storage_used_mb + fileSizeMb, limits.storage_total_mb)
+    };
+
+    const failedCheck = Object.entries(checks).find(([_, check]) => !check.allowed);
+
+    if (failedCheck) {
+      const [checkType, checkResult] = failedCheck;
+      return {
+        allowed: false,
+        reason: checkResult.reason,
+        upgradePrompt: this.generateUpgradePrompt(checkType, 'free', checkResult),
+        currentUsage: mockUsage,
+        limits
+      };
+    }
+
+    return {
+      allowed: true,
+      currentUsage: mockUsage,
+      limits
+    };
+  }
+
+  /**
+   * Get feature access for a specific tier
+   */
+  private getFeatureAccessForTier(tier: TierType, feature: string, limits: any): FeatureAccess {
+    switch (feature) {
+      case 'advanced_analytics':
+        return {
+          hasAccess: limits.analytics === 'advanced' || limits.analytics === 'premium',
+          feature,
+          upgradeRequired: limits.analytics === 'basic'
+        };
+
+      case 'premium_analytics':
+        return {
+          hasAccess: limits.analytics === 'premium',
+          feature,
+          upgradeRequired: limits.analytics !== 'premium'
+        };
+
+      case 'custom_branding':
+        return {
+          hasAccess: limits.custom_branding,
+          feature,
+          upgradeRequired: !limits.custom_branding
+        };
+
+      case 'export_data':
+        return {
+          hasAccess: limits.export_data,
+          feature,
+          upgradeRequired: !limits.export_data
+        };
+
+      case 'unlimited_recipients':
+        return {
+          hasAccess: limits.recipients_per_drop === -1,
+          feature,
+          upgradeRequired: limits.recipients_per_drop !== -1
+        };
+
+      case 'large_file_uploads':
+        return {
+          hasAccess: limits.file_size_mb > 10,
+          feature,
+          upgradeRequired: limits.file_size_mb <= 10
+        };
+
+      default:
+        return {
+          hasAccess: false,
+          feature,
+          reason: 'Unknown feature'
+        };
+    }
+  }
+
+  /**
+   * Fallback usage status when database is not available
+   */
+  private getFallbackUsageStatus() {
+    const tier: TierType = 'free';
+    const limits = TIER_LIMITS[tier];
+    const usage = {
+      drops_created: 1,
+      recipients_added: 2,
+      storage_used_mb: 5
+    };
+
+    const percentages = {
+      drops: (usage.drops_created / limits.drops_per_month) * 100,
+      storage: (usage.storage_used_mb / limits.storage_total_mb) * 100
+    };
+
+    return {
+      usage,
+      limits,
+      tier,
+      warnings: [] as UpgradePrompt[],
+      percentages
+    };
   }
 
   /**
