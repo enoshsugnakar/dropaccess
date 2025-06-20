@@ -1,3 +1,5 @@
+// REPLACE: lib/usageTracking.ts
+
 import { supabaseAdmin } from '@/lib/supabaseClient';
 
 // Subscription tier limits
@@ -33,7 +35,7 @@ export const TIER_LIMITS = {
 
 export type TierType = keyof typeof TIER_LIMITS;
 
-// Get current month period
+// Get current month period - STANDARDIZED
 export function getCurrentMonthPeriod() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -45,9 +47,9 @@ export function getCurrentMonthPeriod() {
   };
 }
 
-// Get user's current usage for the month
+// Get user's current usage for the month - FIXED
 export async function getCurrentUsage(userId: string) {
-   if (!supabaseAdmin) {
+  if (!supabaseAdmin) {
     console.warn('⚠️ supabaseAdmin not configured, using fallback usage data');
     return {
       id: 'mock-id',
@@ -60,29 +62,40 @@ export async function getCurrentUsage(userId: string) {
       storage_used_mb: 5,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    };}
+    };
+  }
 
-  const { period_start, period_end } = getCurrentMonthPeriod();
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   try {
-    // Get or create usage tracking record for current month
+    // Get or create usage tracking record for current month - IMPROVED QUERY
     let { data: usage, error } = await supabaseAdmin
       .from('usage_tracking')
       .select('*')
       .eq('user_id', userId)
       .eq('period_type', 'month')
-      .eq('period_start', period_start)
-      .single();
+      .gte('period_start', periodStart.toISOString())
+      .lte('period_start', now.toISOString())
+      .order('period_start', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (error && error.code === 'PGRST116') {
+    if (error && error.code !== 'PGRST116') {
+      throw error;
+    }
+
+    if (!usage) {
       // No record found, create one
+      const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
       const { data: newUsage, error: createError } = await supabaseAdmin
         .from('usage_tracking')
         .insert({
           user_id: userId,
           period_type: 'month',
-          period_start,
-          period_end,
+          period_start: periodStart.toISOString(),
+          period_end: periodEnd.toISOString(),
           drops_created: 0,
           recipients_added: 0,
           storage_used_mb: 0
@@ -94,8 +107,6 @@ export async function getCurrentUsage(userId: string) {
         throw createError;
       }
       usage = newUsage;
-    } else if (error) {
-      throw error;
     }
 
     return usage;
@@ -105,38 +116,104 @@ export async function getCurrentUsage(userId: string) {
   }
 }
 
-// Update usage after creating a drop
+// Update usage after creating a drop - SIMPLIFIED
 export async function updateUsageAfterDrop(
   userId: string, 
   recipientCount: number, 
   fileSizeMb: number = 0
 ) {
   if (!supabaseAdmin) {
-    throw new Error('Supabase admin client not configured');
+    console.warn('Supabase admin client not configured, skipping usage update');
     return true;
   }
 
   try {
-    const usage = await getCurrentUsage(userId);
-
-    const { error } = await supabaseAdmin
-      .from('usage_tracking')
-      .update({
-        drops_created: usage.drops_created + 1,
-        recipients_added: usage.recipients_added + recipientCount,
-        storage_used_mb: usage.storage_used_mb + fileSizeMb,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', usage.id);
-
-    if (error) {
-      throw error;
+    // Use the standardized update function
+    const now = new Date();
+    
+    // Update monthly tracking
+    await updatePeriodUsage(userId, 'month', now, 'drop_created', 1);
+    await updatePeriodUsage(userId, 'month', now, 'recipient_added', recipientCount);
+    if (fileSizeMb > 0) {
+      await updatePeriodUsage(userId, 'month', now, 'storage_used', fileSizeMb);
+    }
+    
+    // Update weekly tracking
+    await updatePeriodUsage(userId, 'week', now, 'drop_created', 1);
+    await updatePeriodUsage(userId, 'week', now, 'recipient_added', recipientCount);
+    if (fileSizeMb > 0) {
+      await updatePeriodUsage(userId, 'week', now, 'storage_used', fileSizeMb);
     }
 
     return true;
   } catch (error) {
     console.error('Error updating usage after drop:', error);
     throw error;
+  }
+}
+
+// STANDARDIZED period update function
+async function updatePeriodUsage(
+  userId: string, 
+  periodType: 'month' | 'week', 
+  now: Date, 
+  action: string, 
+  amount: number
+) {
+  if (!supabaseAdmin) throw new Error('Admin client not available')
+
+  // Calculate period boundaries - SAME AS API
+  let periodStart: Date, periodEnd: Date
+
+  if (periodType === 'month') {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  } else {
+    periodStart = new Date(now)
+    periodStart.setDate(now.getDate() - now.getDay()) // Start of week (Sunday)
+    periodEnd = new Date(periodStart.getTime() + 7 * 24 * 60 * 60 * 1000)
+  }
+
+  // Try to get existing record with flexible query
+  const { data: existing } = await supabaseAdmin
+    .from('usage_tracking')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('period_type', periodType)
+    .gte('period_start', periodStart.toISOString())
+    .lte('period_start', periodEnd.toISOString())
+    .limit(1)
+    .maybeSingle()
+
+  const updateField = action === 'drop_created' ? 'drops_created' :
+                    action === 'recipient_added' ? 'recipients_added' :
+                    'storage_used_mb'
+
+  if (existing) {
+    // Update existing record
+    const updates: any = { updated_at: now.toISOString() }
+    updates[updateField] = (existing[updateField] || 0) + amount
+
+    await supabaseAdmin
+      .from('usage_tracking')
+      .update(updates)
+      .eq('id', existing.id)
+  } else {
+    // Create new record
+    const newRecord: any = {
+      user_id: userId,
+      period_type: periodType,
+      period_start: periodStart.toISOString(),
+      period_end: periodEnd.toISOString(),
+      drops_created: 0,
+      recipients_added: 0,
+      storage_used_mb: 0
+    }
+    newRecord[updateField] = amount
+
+    await supabaseAdmin
+      .from('usage_tracking')
+      .insert(newRecord)
   }
 }
 
@@ -147,71 +224,80 @@ export async function canCreateDrop(userId: string, recipientCount: number, file
   }
 
   try {
+    const usage = await getCurrentUsage(userId);
+    
     // Get user's tier
-    const { data: user, error: userError } = await supabaseAdmin
+    const { data: user, error } = await supabaseAdmin
       .from('users')
       .select('subscription_tier')
       .eq('id', userId)
       .single();
 
-    if (userError) {
-      throw userError;
-    }
+    if (error) throw error;
 
     const tier = (user.subscription_tier || 'free') as TierType;
     const limits = TIER_LIMITS[tier];
 
-    // Get current usage
-    const usage = await getCurrentUsage(userId);
+    // Check drop limit
+    if (limits.drops_per_month !== -1 && usage.drops_created >= limits.drops_per_month) {
+      return {
+        allowed: false,
+        reason: `Monthly drop limit reached (${usage.drops_created}/${limits.drops_per_month})`
+      };
+    }
 
-    // Check limits
-    const checks = {
-      canCreateDrop: limits.drops_per_month === -1 || usage.drops_created < limits.drops_per_month,
-      canAddRecipients: limits.recipients_per_drop === -1 || recipientCount <= limits.recipients_per_drop,
-      canUploadFile: limits.file_size_mb === -1 || fileSizeMb <= limits.file_size_mb,
-      hasStorageSpace: limits.storage_total_mb === -1 || (usage.storage_used_mb + fileSizeMb) <= limits.storage_total_mb
-    };
+    // Check recipient limit
+    if (limits.recipients_per_drop !== -1 && recipientCount > limits.recipients_per_drop) {
+      return {
+        allowed: false,
+        reason: `Too many recipients (${recipientCount}/${limits.recipients_per_drop} allowed)`
+      };
+    }
 
-    const canProceed = Object.values(checks).every(check => check);
+    // Check file size limit
+    if (limits.file_size_mb !== -1 && fileSizeMb > limits.file_size_mb) {
+      return {
+        allowed: false,
+        reason: `File too large (${fileSizeMb}MB/${limits.file_size_mb}MB allowed)`
+      };
+    }
 
-    return {
-      canProceed,
-      checks,
-      currentUsage: usage,
-      limits,
-      tier
-    };
+    // Check storage limit
+    const totalStorageAfter = usage.storage_used_mb + fileSizeMb;
+    if (limits.storage_total_mb !== -1 && totalStorageAfter > limits.storage_total_mb) {
+      return {
+        allowed: false,
+        reason: `Storage limit exceeded (${Math.round(totalStorageAfter)}MB/${limits.storage_total_mb}MB available)`
+      };
+    }
+
+    return { allowed: true };
   } catch (error) {
     console.error('Error checking drop creation limits:', error);
     throw error;
   }
 }
 
-// Get usage summary for dashboard
+// Get comprehensive usage summary for a user
 export async function getUsageSummary(userId: string) {
   if (!supabaseAdmin) {
     throw new Error('Supabase admin client not configured');
   }
 
   try {
-    // Get user's tier
-    const { data: user, error: userError } = await supabaseAdmin
+    const usage = await getCurrentUsage(userId);
+    
+    const { data: user, error } = await supabaseAdmin
       .from('users')
       .select('subscription_tier, subscription_status')
       .eq('id', userId)
       .single();
 
-    if (userError) {
-      throw userError;
-    }
+    if (error) throw error;
 
     const tier = (user.subscription_tier || 'free') as TierType;
     const limits = TIER_LIMITS[tier];
 
-    // Get current usage
-    const usage = await getCurrentUsage(userId);
-
-    // Calculate percentages
     const percentages = {
       drops: limits.drops_per_month === -1 ? 0 : (usage.drops_created / limits.drops_per_month) * 100,
       storage: limits.storage_total_mb === -1 ? 0 : (usage.storage_used_mb / limits.storage_total_mb) * 100
@@ -252,7 +338,7 @@ export async function resetUsageForNewPeriod(userId: string) {
         storage_used_mb: 0
       });
 
-    if (error) {
+    if (error && error.code !== '23505') { // Ignore duplicate key errors
       throw error;
     }
 

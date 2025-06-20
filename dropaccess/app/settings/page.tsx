@@ -597,7 +597,7 @@ function SubscriptionTab() {
           </div>
         )}
 
-        {/* Debug Info - Development Only */}
+        {/* Debug Info - Development Only 
         {process.env.NODE_ENV === 'development' && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
             <h4 className="font-medium text-yellow-800 mb-2">Debug Info:</h4>
@@ -607,8 +607,8 @@ function SubscriptionTab() {
               <p>Current Tier: {userTier}</p>
               <p>Subscription Status: {usageData.subscription.status}</p>
             </div>
-          </div>
-        )}
+          </div>*/}
+        
       </CardContent>
     </Card>
   )

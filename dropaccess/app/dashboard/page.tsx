@@ -46,6 +46,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { SubscriptionStatus } from '@/components/SubscriptionStatus'
+import { useSubscription } from '@/components/SubscriptionProvider'
 
 interface Drop {
   id: string
@@ -68,6 +69,7 @@ interface Stats {
   totalDrops: number
   activeDrops: number
   totalRecipients: number
+  totalViews: number
   // Subscription limits
   activeDropsLimit: number
   monthlyRecipientsLimit: number
@@ -94,6 +96,7 @@ interface UsageData {
 export default function Dashboard() {
   const { user } = useAuth()
   const router = useRouter()
+  const { usageData, refreshUsage } = useSubscription()
   
   // State
   const [drops, setDrops] = useState<Drop[]>([])
@@ -103,10 +106,11 @@ export default function Dashboard() {
     totalDrops: 0,
     activeDrops: 0, 
     totalRecipients: 0,
+    totalViews: 0,
     activeDropsLimit: 3,
     monthlyRecipientsLimit: 9
   })
-  const [usageData, setUsageData] = useState<UsageData | null>(null)
+  //const [usageData, setUsageData] = useState<UsageData | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive' | 'expired'>('all')
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'name'>('newest')
@@ -142,92 +146,96 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Fetch usage data with caching
-  const fetchUsageData = useCallback(async () => {
+  const fetchRecipientCount = useCallback(async () => {
     if (!user?.id) return
-
+  
     try {
-      const response = await fetch(`/api/usage?userId=${user.id}`, {
-        headers: {
-          'Cache-Control': 'max-age=30'
-        }
-      })
+      const response = await fetch(`/api/recipients/count?userId=${user.id}`)
       
       if (response.ok) {
         const data = await response.json()
-        setUsageData(data)
-        
-        // Calculate limits based on tier
-        const limits = calculateSubscriptionLimits(data.subscription.tier)
         setStats(prev => ({
           ...prev,
-          activeDropsLimit: limits.activeDropsLimit,
-          monthlyRecipientsLimit: limits.monthlyRecipientsLimit
+          totalRecipients: data.recipientCount || 0
         }))
       }
     } catch (error) {
-      console.error('Error fetching usage data:', error)
+      console.error('Error fetching recipient count:', error)
     }
-  }, [user?.id, calculateSubscriptionLimits])
+  }, [user?.id])
+
+  const fetchTotalViews = useCallback(async () => {
+    if (!user?.id) return
+  
+    try {
+      const response = await fetch(`/api/views/count?userId=${user.id}`)
+      
+      if (response.ok) {
+        const data = await response.json()
+        setStats(prev => ({
+          ...prev,
+          totalViews: data.totalViews || 0
+        }))
+      }
+    } catch (error) {
+      console.error('Error fetching total views:', error)
+    }
+  }, [user?.id])
 
   // Fetch drops with smart caching
   const fetchDrops = useCallback(async (forceRefresh = false) => {
     if (!user?.id) return
-
+  
     const now = Date.now()
     if (!forceRefresh && now - lastFetchTime.current < CACHE_DURATION && allDrops.length > 0) {
       return // Use cached data
     }
-
+  
     try {
       setLoading(forceRefresh ? false : true)
       
+      // Simple query - no recipient counting here
       const { data: dropsData, error } = await supabase
         .from('drops')
-        .select(`
-          *,
-          drop_recipients!inner(count)
-        `)
+        .select('*')
         .eq('owner_id', user.id)
         .order('created_at', { ascending: false })
-
+  
       if (error) throw error
-
-      // Process drops data
-      const processedDrops = dropsData?.map(drop => ({
-        ...drop,
-        recipient_count: drop.drop_recipients?.[0]?.count || 0,
-        access_count: 0 // You can add this later if needed
-      })) || []
-
-      setAllDrops(processedDrops)
+  
+      setAllDrops(dropsData || [])
       lastFetchTime.current = now
-
-      // Calculate stats
-      const totalDropsCount = processedDrops.length
-      const activeDropsCount = processedDrops.filter(drop => drop.is_active).length
+  
+      // Calculate basic stats
+      const totalDropsCount = dropsData?.length || 0
+      const activeDropsCount = dropsData?.filter(drop => drop.is_active).length || 0
       
       setStats(prev => ({
         ...prev,
         totalDrops: totalDropsCount,
         activeDrops: activeDropsCount
       }))
-
-      // Update total recipients from usage data
-      if (usageData) {
-        setStats(prev => ({
-          ...prev,
-          totalRecipients: usageData.monthly.recipients_added
-        }))
-      }
-
+  
+      // Fetch both recipient count and total views
+      fetchRecipientCount()
+      fetchTotalViews()  // Add this line
+  
     } catch (error) {
       console.error('Error fetching drops:', error)
       toast.error('Failed to load drops')
     } finally {
       setLoading(false)
     }
-  }, [user?.id, allDrops.length, usageData])
+  }, [user?.id, fetchRecipientCount, fetchTotalViews])
+  
+
+// Update your useEffect to call both:
+useEffect(() => {
+  if (user?.id) {
+    refreshUsage()
+    fetchDrops()
+  }
+}, [user?.id, refreshUsage, fetchDrops])
 
   // Filter and sort drops with memoization
   const filteredAndSortedDrops = useMemo(() => {
@@ -292,16 +300,41 @@ export default function Dashboard() {
   // Initial data load
   useEffect(() => {
     if (user?.id) {
-      fetchUsageData()
+      
       fetchDrops()
     }
-  }, [user?.id, fetchUsageData, fetchDrops])
+  }, [user?.id, fetchDrops])
+
+  useEffect(() => {
+    if (usageData) {
+      const limits = calculateSubscriptionLimits(usageData.subscription.tier)
+      setStats(prev => ({
+        ...prev,
+        activeDropsLimit: limits.activeDropsLimit,
+        monthlyRecipientsLimit: limits.monthlyRecipientsLimit,
+        totalRecipients: usageData.monthly.recipients_added
+      }))
+    }
+  }, [usageData, calculateSubscriptionLimits])
+
+  const getRecipientLimit = () => {
+    if (!usageData) return 0
+    
+    // If unlimited drops or recipients
+    if (usageData.limits.drops === -1 || usageData.limits.recipients === -1) {
+      return -1
+    }
+    
+    // Calculate total possible recipients: drops_limit × recipients_per_drop_limit
+    return usageData.limits.drops * usageData.limits.recipients
+  }
+  
 
   // Manual refresh
   const handleRefresh = async () => {
     setRefreshing(true)
     await Promise.all([
-      fetchUsageData(),
+      refreshUsage(),
       fetchDrops(true)
     ])
     setRefreshing(false)
@@ -347,51 +380,58 @@ export default function Dashboard() {
           </div>
 
           {/* Enhanced Stats Cards with Subscription Limits */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-            {/* Total Drops - No limit shown */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-2 md:mb-3">
-                <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Total Drops</span>
-                <FileUp className="w-3 h-3 md:w-4 md:h-4 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
-                {stats.totalDrops}
-              </div>
-            </div>
+<div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+  {/* Total Drops - No limit shown */}
+  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between mb-2 md:mb-3">
+      <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Total Drops</span>
+      <FileUp className="w-3 h-3 md:w-4 md:h-4 text-blue-600 dark:text-blue-400" />
+    </div>
+    <div className="text-lg md:text-2xl font-semibold text-gray-900 dark:text-white">
+      {stats.totalDrops}
+    </div>
+  </div>
 
-            {/* Active Drops - With limit */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-2 md:mb-3">
-                <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Active Drops</span>
-                <Activity className="w-3 h-3 md:w-4 md:h-4 text-green-600 dark:text-green-400" />
-              </div>
-              <div className="text-lg md:text-2xl font-semibold text-green-600 dark:text-green-400">
-                {stats.activeDropsLimit === -1 
-                  ? stats.activeDrops 
-                  : `${stats.activeDrops}/${stats.activeDropsLimit}`
-                }
-              </div>
-            </div>
+  {/* Active Drops - With limit */}
+  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between mb-2 md:mb-3">
+      <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Active Drops</span>
+      <Activity className="w-3 h-3 md:w-4 md:h-4 text-green-600 dark:text-green-400" />
+    </div>
+    <div className="text-lg md:text-2xl font-semibold text-green-600 dark:text-green-400">
+      {stats.activeDropsLimit === -1 
+        ? stats.activeDrops 
+        : `${stats.activeDrops}/${stats.activeDropsLimit}`
+      }
+    </div>
+  </div>
 
-            {/* Recipients - With calculated limit */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-2 md:mb-3">
-                <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Recipients</span>
-                <Users className="w-3 h-3 md:w-4 md:h-4 text-purple-600 dark:text-purple-400" />
-              </div>
-              <div className="text-lg md:text-2xl font-semibold text-purple-600 dark:text-purple-400">
-                {stats.monthlyRecipientsLimit === -1 
-                  ? (usageData?.monthly.recipients_added || 0)
-                  : `${usageData?.monthly.recipients_added || 0}/${stats.monthlyRecipientsLimit}`
-                }
-              </div>
-            </div>
-          </div>
+  {/* Recipients - With calculated total allowed */}
+  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between mb-2 md:mb-3">
+      <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Recipients</span>
+      <Users className="w-3 h-3 md:w-4 md:h-4 text-purple-600 dark:text-purple-400" />
+    </div>
+    <div className="text-lg md:text-2xl font-semibold text-purple-600 dark:text-purple-400">
+      {stats.monthlyRecipientsLimit === -1 
+        ? stats.totalRecipients
+        : `${stats.totalRecipients}/${stats.monthlyRecipientsLimit}`
+      }
+    </div>
+  </div>
 
-          {/* Subscription Status */}
-          <div className="mb-8">
-            <SubscriptionStatus />
-          </div>
+  {/* Total Views - New 4th card */}
+  <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-5 border border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between mb-2 md:mb-3">
+      <span className="text-xs md:text-sm font-medium text-gray-500 dark:text-gray-400">Total Views</span>
+      <Eye className="w-3 h-3 md:w-4 md:h-4 text-orange-600 dark:text-orange-400" />
+    </div>
+    <div className="text-lg md:text-2xl font-semibold text-orange-600 dark:text-orange-400">
+      {stats.totalViews}
+    </div>
+  </div>
+</div>
+          
           {/* Filters and Controls */}
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 md:p-6 border border-gray-200 dark:border-gray-700 mb-6">
             <div className="flex flex-col lg:flex-row lg:items-center gap-4">
