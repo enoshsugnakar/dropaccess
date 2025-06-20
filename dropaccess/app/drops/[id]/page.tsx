@@ -125,10 +125,27 @@ export default function DropAccessPage() {
       if (target?.closest(".pdf-links-dropdown") || target?.closest(".pdf-links-trigger")) {
         return;
       }
-      e.preventDefault();
-      return false;
+      
+      // Check if current URL contains "google"
+      const session = getValidSession();
+      const currentUrl = session?.contentUrl || contentUrl;
+      const isGoogleUrl = currentUrl && currentUrl.toLowerCase().includes('google');
+      
+      // Prevent right-click for Google URLs
+      if (isGoogleUrl) {
+        e.preventDefault();
+        return false;
+      }
+      
+      // Always prevent for file uploads
+      if (dropData?.drop_type === 'file') {
+        e.preventDefault();
+        return false;
+      }
+      
+      // Allow right-click for non-Google URLs
     };
-
+  
     const preventKeys = (e: KeyboardEvent) => {
       if (
         e.key === "F12" ||
@@ -141,7 +158,7 @@ export default function DropAccessPage() {
         return false;
       }
     };
-
+  
     // Security CSS
     const style = document.createElement("style");
     style.innerHTML = `
@@ -156,14 +173,14 @@ export default function DropAccessPage() {
         -webkit-user-select: text !important;
         user-select: text !important;
       }
-
+  
       .pdf-page-container {
         position: relative;
         display: block;
         margin: 20px auto;
         max-width: 100%;
       }
-
+  
       .pdf-page-image {
         display: block !important;
         width: 100% !important;
@@ -174,16 +191,16 @@ export default function DropAccessPage() {
         border-radius: 8px !important;
         pointer-events: none !important;
       }
-
+  
       @media print {
         body { display: none !important; }
       }
     `;
     document.head.appendChild(style);
-
+  
     document.addEventListener("contextmenu", preventContext, { capture: true, passive: false });
     document.addEventListener("keydown", preventKeys, { capture: true, passive: false });
-
+  
     return () => {
       document.removeEventListener("contextmenu", preventContext, { capture: true });
       document.removeEventListener("keydown", preventKeys, { capture: true });
@@ -191,7 +208,7 @@ export default function DropAccessPage() {
         style.parentNode.removeChild(style);
       }
     };
-  }, []);
+  }, [dropData, contentUrl]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -1205,11 +1222,11 @@ const verifyEmail = async (e: React.FormEvent) => {
                 title={dropData?.name}
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
               />
-              <div
+              {/*<div
                 className="absolute inset-0 z-50 bg-transparent"
                 onContextMenu={(e) => e.preventDefault()}
                 style={{ pointerEvents: "auto" }}
-              />
+              />*/}
             </div>
           </div>
         );

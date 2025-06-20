@@ -338,7 +338,7 @@ export default function Dashboard() {
                 {refreshing ? 'Refreshing...' : 'Refresh'}
               </Button>
               <Button asChild>
-                <Link href="/create">
+                <Link href="/drops/new">
                   <Plus className="w-4 h-4 mr-2" />
                   Create Drop
                 </Link>

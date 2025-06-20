@@ -1,6 +1,8 @@
+// REPLACE THE ENTIRE components/SubscriptionProvider.tsx file with this:
+
 'use client'
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth } from '@/components/AuthProvider'
 
 interface UsageSummary {
@@ -68,16 +70,17 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
+  // Use refs to prevent infinite loops
+  const isInitialLoad = useRef(true)
+  const lastUserId = useRef<string | null>(null)
+
   // Derived state
   const userTier = usageData?.subscription?.tier as 'free' | 'individual' | 'business' || 'free'
 
-  // Fetch usage data
-  const refreshUsage = useCallback(async () => {
-    if (!user?.id) return
-
+  // Stable functions that don't change on every render
+  const fetchUsageData = useCallback(async (userId: string) => {
     try {
-      const response = await fetch(`/api/usage?userId=${user.id}`, {
-        // Add cache busting to prevent stale data
+      const response = await fetch(`/api/usage?userId=${userId}`, {
         headers: {
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache'
@@ -103,14 +106,11 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       console.error('Error fetching usage data:', err)
       setError(err instanceof Error ? err.message : 'Failed to fetch usage data')
     }
-  }, [user?.id])
+  }, [])
 
-  // Fetch subscription data
-  const refreshSubscription = useCallback(async () => {
-    if (!user?.id) return
-
+  const fetchSubscriptionData = useCallback(async (userId: string) => {
     try {
-      const response = await fetch(`/api/payments/manage?userId=${user.id}`, {
+      const response = await fetch(`/api/payments/manage?userId=${userId}`, {
         headers: {
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache'
@@ -128,21 +128,32 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
           timestamp: new Date().toISOString()
         })
       } else {
-        // Not having subscription data is not an error for free users
         setSubscriptionData({ hasSubscription: false, subscription: null, user: null })
       }
       
     } catch (err) {
       console.error('Error fetching subscription data:', err)
-      // Don't set error for subscription data as it's optional
       setSubscriptionData({ hasSubscription: false, subscription: null, user: null })
     }
-  }, [user?.id])
+  }, [])
 
-  // Refresh all data
+  // Stable refresh functions
+  const refreshUsage = useCallback(async () => {
+    if (!user?.id) return
+    await fetchUsageData(user.id)
+  }, [user?.id, fetchUsageData])
+
+  const refreshSubscription = useCallback(async () => {
+    if (!user?.id) return
+    await fetchSubscriptionData(user.id)
+  }, [user?.id, fetchSubscriptionData])
+
   const refreshData = useCallback(async () => {
     if (!user?.id) {
       setLoading(false)
+      setUsageData(null)
+      setSubscriptionData(null)
+      setError(null)
       return
     }
 
@@ -151,8 +162,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
     try {
       await Promise.all([
-        refreshUsage(),
-        refreshSubscription()
+        fetchUsageData(user.id),
+        fetchSubscriptionData(user.id)
       ])
     } catch (err) {
       console.error('Error refreshing subscription data:', err)
@@ -160,34 +171,46 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     } finally {
       setLoading(false)
     }
-  }, [user?.id, refreshUsage, refreshSubscription])
+  }, [user?.id, fetchUsageData, fetchSubscriptionData])
 
-  // Initial data fetch
+  // Initial data fetch - only when user changes
   useEffect(() => {
-    if (user?.id) {
-      refreshData()
-    } else {
-      setLoading(false)
-      setUsageData(null)
-      setSubscriptionData(null)
-      setError(null)
+    const currentUserId = user?.id || null
+    
+    // Only fetch if user actually changed
+    if (currentUserId !== lastUserId.current) {
+      lastUserId.current = currentUserId
+      
+      if (currentUserId) {
+        console.log('🔄 Initial data fetch for user:', currentUserId)
+        refreshData()
+      } else {
+        setLoading(false)
+        setUsageData(null)
+        setSubscriptionData(null)
+        setError(null)
+      }
     }
   }, [user?.id, refreshData])
 
-  // Auto-refresh on focus (to catch subscription changes)
+  // Auto-refresh on focus (to catch subscription changes) - FIXED
   useEffect(() => {
     const handleFocus = () => {
+      if (!user?.id) return
+      
       // Only refresh if data is older than 30 seconds
       if (lastUpdated && Date.now() - lastUpdated.getTime() > 30000) {
         console.log('🔄 Auto-refreshing subscription data on focus')
-        refreshData()
+        fetchUsageData(user.id)
       }
     }
 
     const handleVisibilityChange = () => {
-      if (!document.hidden && lastUpdated && Date.now() - lastUpdated.getTime() > 30000) {
+      if (!user?.id || document.hidden) return
+      
+      if (lastUpdated && Date.now() - lastUpdated.getTime() > 30000) {
         console.log('🔄 Auto-refreshing subscription data on visibility change')
-        refreshData()
+        fetchUsageData(user.id)
       }
     }
 
@@ -198,21 +221,21 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [lastUpdated, refreshData])
+  }, [user?.id, lastUpdated, fetchUsageData])
 
-  // Periodic refresh every 2 minutes (to catch webhook updates)
+  // Periodic refresh every 2 minutes - FIXED
   useEffect(() => {
     if (!user?.id) return
 
     const interval = setInterval(() => {
       if (lastUpdated && Date.now() - lastUpdated.getTime() > 120000) { // 2 minutes
         console.log('🔄 Periodic refresh of subscription data')
-        refreshUsage() // Just refresh usage, it's faster
+        fetchUsageData(user.id)
       }
     }, 120000) // Check every 2 minutes
 
     return () => clearInterval(interval)
-  }, [user?.id, lastUpdated, refreshUsage])
+  }, [user?.id, lastUpdated, fetchUsageData])
 
   const value: SubscriptionContextType = {
     usageData,
